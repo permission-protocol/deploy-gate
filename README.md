@@ -5,7 +5,7 @@
 <h1 align="center">Deploy Gate</h1>
 
 <p align="center">
-  <strong>One line. Human approval required. No exceptions.</strong>
+  <strong>One workflow. Human approval required. No exceptions.</strong>
 </p>
 
 <p align="center">
@@ -15,14 +15,29 @@
   <a href="https://github.com/marketplace/actions/deploy-gate">
     <img src="https://img.shields.io/badge/GitHub_Marketplace-Deploy_Gate-blue?style=flat-square" alt="Marketplace">
   </a>
-  <a href="https://permissionprotocol.com">
-    <img src="https://img.shields.io/badge/Permission_Protocol-Visit-black?style=flat-square" alt="Permission Protocol">
-  </a>
+  <img src="https://img.shields.io/badge/🛡️_Deploy_Gate-Enabled-success?style=flat-square" alt="Deploy Gate Enabled">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Repos_Protected-3-blueviolet?style=flat-square" alt="Repos Protected">
+  <img src="https://img.shields.io/badge/Approvals_Issued-12-blue?style=flat-square" alt="Approvals Issued">
 </p>
 
 ---
 
-## Quick Start
+## What It Does
+
+**Blocks merges to `main` until a human approves.**
+
+Any PR touching protected paths (default: `deploy/*`, `.github/workflows/*`) requires cryptographic approval before merge. No approval = CI fails = merge blocked.
+
+---
+
+## Install (3 minutes)
+
+**👉 [Full install guide](./INSTALL.md)** with screenshots and troubleshooting.
+
+**Quick version:**
 
 ```yaml
 # .github/workflows/deploy-gate.yml
@@ -42,44 +57,43 @@ jobs:
           pp-api-key: ${{ secrets.PP_API_KEY }}
 ```
 
-**That's it.** PRs touching protected paths now require human approval.
+1. Get API key from [app.permissionprotocol.com](https://app.permissionprotocol.com)
+2. Add secret: `gh secret set PP_API_KEY -b "pp_live_..."`
+3. Add workflow above
+4. Open PR → Watch it fail → Approve → Merge
 
 ---
 
-## What Happens
+## How It Works
 
 ```
-PR opened
-    │
-    ▼
-┌──────────────────┐
-│ Protected path?  │──── NO ───▶ ✅ Merge allowed
-└────────┬─────────┘
-         │ YES
-         ▼
-┌──────────────────┐
-│ Receipt exists?  │──── YES ──▶ ✅ Merge allowed
-└────────┬─────────┘
-         │ NO
-         ▼
-┌──────────────────┐
-│   ❌ CI FAILS    │
-│                  │
-│  Approval URL    │
-│  shown in logs   │
-└──────────────────┘
-         │
-         ▼
-   Human approves
-   in PP dashboard
-         │
-         ▼
-   Re-run CI → ✅
+   PR opened → changes deploy/ or .github/workflows/
+                        │
+                        ▼
+               ┌─────────────────┐
+               │  Receipt exist? │
+               └────────┬────────┘
+                        │
+          NO ───────────┴─────────── YES
+          │                           │
+          ▼                           ▼
+   ┌──────────────┐           ┌──────────────┐
+   │  ❌ CI FAILS │           │  ✅ MERGE OK │
+   │              │           └──────────────┘
+   │  Approval    │
+   │  URL in logs │
+   └──────┬───────┘
+          │
+          ▼
+   Human approves in dashboard
+          │
+          ▼
+   Re-run CI → ✅ Merge OK
 ```
 
 ---
 
-## Setup
+## Advanced Setup
 
 ### 1. Get API Key
 
