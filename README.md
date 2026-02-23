@@ -19,6 +19,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/permission-protocol/deploy-gate/stargazers">
+    <img src="https://img.shields.io/github/stars/permission-protocol/deploy-gate?style=flat-square&label=stars" alt="GitHub Stars">
+  </a>
+  <a href="https://github.com/permission-protocol/deploy-gate/network/members">
+    <img src="https://img.shields.io/github/forks/permission-protocol/deploy-gate?style=flat-square&label=forks" alt="Forks">
+  </a>
   <img src="https://img.shields.io/badge/Repos_Protected-3-blueviolet?style=flat-square" alt="Repos Protected">
   <img src="https://img.shields.io/badge/Approvals_Issued-12-blue?style=flat-square" alt="Approvals Issued">
 </p>
@@ -189,6 +195,8 @@ Deploy Gate closes that gap.
 ## Live Demo
 
 See it in action: [permission-protocol/pp-demo](https://github.com/permission-protocol/pp-demo)
+
+**🏆 [The Receipt Challenge](https://permissionprotocol.com/challenge)** — Try to merge without a receipt. If you succeed, you win.
 
 ---
 
