@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/❌_No_Receipt-No_Merge-red?style=for-the-badge" alt="No Receipt = No Merge">
+  <img src="./assets/gate-blocked.svg" alt="Deploy Gate blocked symbol" width="120">
+</p>
+
+<p align="center">
+  <strong>No receipt. No merge.</strong>
 </p>
 
 <h1 align="center">Deploy Gate</h1>
@@ -28,6 +32,25 @@
   <img src="https://img.shields.io/badge/Repos_Protected-3-blueviolet?style=flat-square" alt="Repos Protected">
   <img src="https://img.shields.io/badge/Approvals_Issued-12-blue?style=flat-square" alt="Approvals Issued">
 </p>
+
+---
+
+## Badge Usage
+
+<p align="left">
+  <img src="./assets/badge-blocked.svg" alt="deploy gate blocked badge">
+  <img src="./assets/badge-approved.svg" alt="deploy gate approved badge">
+</p>
+
+<p align="left">
+  <img src="./assets/gate-blocked.svg" alt="blocked gate symbol" width="52">
+  <img src="./assets/gate-signed.svg" alt="approved gate symbol" width="52">
+</p>
+
+```markdown
+![deploy gate blocked](./assets/badge-blocked.svg)
+![deploy gate approved](./assets/badge-approved.svg)
+```
 
 ---
 
@@ -71,6 +94,10 @@ jobs:
 ---
 
 ## How It Works
+
+<p align="left">
+  <img src="./assets/flow-diagram.svg" alt="PR Created to Deploy Gate flow">
+</p>
 
 ```
    PR opened → changes deploy/ or .github/workflows/
