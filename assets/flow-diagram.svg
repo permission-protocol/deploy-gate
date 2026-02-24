@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="250" viewBox="0 0 980 250" role="img" aria-labelledby="title desc">
+  <title id="title">Deploy Gate Flow</title>
+  <desc id="desc">Pull request creation flows into deploy gate; no receipt is blocked and valid receipt is approved.</desc>
+  <defs>
+    <style>
+      .label { font: 600 18px Arial, sans-serif; fill: #0a0a0a; }
+      .small { font: 700 16px Arial, sans-serif; fill: #ffffff; }
+      .arrow { stroke: #0a0a0a; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#0a0a0a"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="70" width="230" height="110" rx="12" fill="#ffffff" stroke="#0a0a0a" stroke-width="3"/>
+  <text x="135" y="134" text-anchor="middle" class="label">PR Created</text>
+
+  <rect x="374" y="70" width="230" height="110" rx="12" fill="#ffffff" stroke="#0a0a0a" stroke-width="3"/>
+  <text x="489" y="124" text-anchor="middle" class="label">Deploy Gate</text>
+  <text x="489" y="149" text-anchor="middle" class="label">Checks Receipt</text>
+
+  <rect x="730" y="20" width="230" height="90" rx="12" fill="#aa4455"/>
+  <text x="845" y="58" text-anchor="middle" class="small">No Receipt</text>
+  <text x="845" y="82" text-anchor="middle" class="small">Blocked</text>
+
+  <rect x="730" y="140" width="230" height="90" rx="12" fill="#44aa99"/>
+  <text x="845" y="178" text-anchor="middle" class="small">Valid Receipt</text>
+  <text x="845" y="202" text-anchor="middle" class="small">Approved</text>
+
+  <path class="arrow" d="M250 125 H374"/>
+  <path class="arrow" d="M604 110 H730"/>
+  <path class="arrow" d="M604 140 H730"/>
+</svg>

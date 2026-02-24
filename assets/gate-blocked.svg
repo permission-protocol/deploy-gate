@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+  <title id="title">Deploy Gate Blocked</title>
+  <desc id="desc">Gate symbol in blocked state with severed vertical channel.</desc>
+  <rect x="16" y="16" width="128" height="128" fill="none" stroke="#aa4455" stroke-width="12"/>
+  <line x1="16" y1="80" x2="144" y2="80" stroke="#aa4455" stroke-width="12"/>
+  <line x1="80" y1="16" x2="80" y2="54" stroke="#aa4455" stroke-width="12"/>
+  <line x1="80" y1="106" x2="80" y2="144" stroke="#aa4455" stroke-width="12"/>
+</svg>
