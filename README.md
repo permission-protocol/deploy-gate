@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/gate-blocked.svg" alt="Deploy Gate blocked symbol" width="120">
+  <img src="./assets/gate-blocked.svg" alt="Deploy Gate blocked symbol" width="64">
 </p>
 
 <p align="center">
@@ -43,8 +43,8 @@
 </p>
 
 <p align="left">
-  <img src="./assets/gate-blocked.svg" alt="blocked gate symbol" width="52">
-  <img src="./assets/gate-signed.svg" alt="approved gate symbol" width="52">
+  <img src="./assets/gate-blocked.svg" alt="blocked gate symbol" width="64">
+  <img src="./assets/gate-signed.svg" alt="approved gate symbol" width="64">
 </p>
 
 ```markdown

@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16" fill="none" shape-rendering="geometricPrecision" role="img" aria-labelledby="title desc">
   <title id="title">Deploy Gate Approved</title>
   <desc id="desc">Gate symbol in signed state with connected vertical channel.</desc>
-  <rect x="16" y="16" width="128" height="128" fill="none" stroke="#44aa99" stroke-width="12"/>
-  <line x1="16" y1="80" x2="144" y2="80" stroke="#44aa99" stroke-width="12"/>
-  <line x1="80" y1="16" x2="80" y2="144" stroke="#44aa99" stroke-width="12"/>
+  <rect x="1.5" y="1.5" width="13" height="13" fill="none" stroke="#44aa99" stroke-width="1.2"/>
+  <line x1="1.5" y1="8" x2="14.5" y2="8" stroke="#44aa99" stroke-width="1.2"/>
+  <line x1="8" y1="1.5" x2="8" y2="14.5" stroke="#44aa99" stroke-width="1.2"/>
 </svg>
