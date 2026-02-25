@@ -6,6 +6,8 @@
       .label { font: 600 18px Arial, sans-serif; fill: #0a0a0a; }
       .small { font: 700 16px Arial, sans-serif; fill: #ffffff; }
       .arrow { stroke: #0a0a0a; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
+      .gate-center { stroke: #1a1a1a; stroke-width: 1.2; fill: none; }
+      .gate-light { stroke: #ffffff; stroke-width: 1.2; fill: none; }
     </style>
     <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
       <polygon points="0 0, 10 3.5, 0 7" fill="#0a0a0a"/>
@@ -16,16 +18,33 @@
   <text x="135" y="134" text-anchor="middle" class="label">PR Created</text>
 
   <rect x="374" y="70" width="230" height="110" rx="12" fill="#ffffff" stroke="#0a0a0a" stroke-width="3"/>
-  <text x="489" y="124" text-anchor="middle" class="label">Deploy Gate</text>
-  <text x="489" y="149" text-anchor="middle" class="label">Checks Receipt</text>
+  <g transform="translate(399 96) scale(2.4)">
+    <rect class="gate-center" x="1.5" y="1.5" width="13" height="13"/>
+    <line class="gate-center" x1="1.5" y1="8" x2="14.5" y2="8"/>
+    <line class="gate-center" x1="8" y1="1.5" x2="8" y2="5.5"/>
+    <line class="gate-center" x1="8" y1="10.5" x2="8" y2="14.5"/>
+  </g>
+  <text x="516" y="124" text-anchor="middle" class="label">Deploy Gate</text>
+  <text x="516" y="149" text-anchor="middle" class="label">Checks Receipt</text>
 
   <rect x="730" y="20" width="230" height="90" rx="12" fill="#aa4455"/>
-  <text x="845" y="58" text-anchor="middle" class="small">No Receipt</text>
-  <text x="845" y="82" text-anchor="middle" class="small">Blocked</text>
+  <g transform="translate(748 40) scale(1.9)">
+    <rect class="gate-light" x="1.5" y="1.5" width="13" height="13"/>
+    <line class="gate-light" x1="1.5" y1="8" x2="14.5" y2="8"/>
+    <line class="gate-light" x1="8" y1="1.5" x2="8" y2="5.5"/>
+    <line class="gate-light" x1="8" y1="10.5" x2="8" y2="14.5"/>
+  </g>
+  <text x="859" y="58" text-anchor="middle" class="small">No Receipt</text>
+  <text x="859" y="82" text-anchor="middle" class="small">Blocked</text>
 
   <rect x="730" y="140" width="230" height="90" rx="12" fill="#44aa99"/>
-  <text x="845" y="178" text-anchor="middle" class="small">Valid Receipt</text>
-  <text x="845" y="202" text-anchor="middle" class="small">Approved</text>
+  <g transform="translate(748 160) scale(1.9)">
+    <rect class="gate-light" x="1.5" y="1.5" width="13" height="13"/>
+    <line class="gate-light" x1="1.5" y1="8" x2="14.5" y2="8"/>
+    <line class="gate-light" x1="8" y1="1.5" x2="8" y2="14.5"/>
+  </g>
+  <text x="864" y="178" text-anchor="middle" class="small">Valid Receipt</text>
+  <text x="864" y="202" text-anchor="middle" class="small">Approved</text>
 
   <path class="arrow" d="M250 125 H374"/>
   <path class="arrow" d="M604 110 H730"/>
