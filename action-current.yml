@@ -1,0 +1,136 @@
+name: 'Deploy Gate'
+description: '🔐 Require human approval before deploy. No receipt = No merge.'
+author: 'Permission Protocol'
+
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  pp-api-key:
+    description: 'Permission Protocol API key'
+    required: true
+  pp-base-url:
+    description: 'Permission Protocol base URL'
+    required: false
+    default: 'https://app.permissionprotocol.com'
+  protected-paths:
+    description: 'Regex pattern for protected paths (default: deploy/, .github/workflows/)'
+    required: false
+    default: '^(deploy/|\.github/workflows/)'
+  fail-on-missing:
+    description: 'Fail if no receipt exists (creates approval request)'
+    required: false
+    default: 'true'
+
+outputs:
+  approved:
+    description: 'Whether the deploy was approved'
+    value: ${{ steps.verify.outputs.approved }}
+  request-id:
+    description: 'Deploy request ID (if created)'
+    value: ${{ steps.verify.outputs.request-id }}
+  approval-url:
+    description: 'URL to approve the deploy'
+    value: ${{ steps.verify.outputs.approval-url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check for protected paths
+      id: check
+      shell: bash
+      run: |
+        echo "🔍 Checking for protected paths..."
+        
+        PROTECTED_REGEX="${{ inputs.protected-paths }}"
+        CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files --jq '.files[].path' 2>/dev/null || echo "")
+        
+        if [ -z "$CHANGED_FILES" ]; then
+          echo "⚠️ Could not get changed files, checking all"
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} 2>/dev/null || echo "")
+        fi
+        
+        echo "Changed files:"
+        echo "$CHANGED_FILES"
+        
+        PROTECTED=$(echo "$CHANGED_FILES" | grep -E "$PROTECTED_REGEX" || true)
+        if [ -n "$PROTECTED" ]; then
+          echo "🔒 Protected paths detected:"
+          echo "$PROTECTED"
+          echo "protected=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "✅ No protected paths changed"
+          echo "protected=false" >> "$GITHUB_OUTPUT"
+        fi
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Verify PP Receipt
+      id: verify
+      if: steps.check.outputs.protected == 'true'
+      shell: bash
+      run: |
+        echo "═══════════════════════════════════════════════════════════"
+        echo "  🔐 PERMISSION PROTOCOL - Deploy Authorization Required"
+        echo "═══════════════════════════════════════════════════════════"
+        echo ""
+        
+        REPO="${{ github.repository }}"
+        REPO="${REPO,,}"
+        SHA="${{ github.event.pull_request.head.sha }}"
+        PR="${{ github.event.pull_request.number }}"
+        
+        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+          "${{ inputs.pp-base-url }}/api/v1/receipts/verify" \
+          -H "X-PP-API-Key: ${{ inputs.pp-api-key }}" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"scope\": {
+              \"repo\": \"${REPO}\",
+              \"prNumber\": ${PR},
+              \"headSha\": \"${SHA}\",
+              \"env\": \"production\",
+              \"capability\": \"deploy:production\"
+            },
+            \"redeem\": false,
+            \"failOnMissing\": ${{ inputs.fail-on-missing }}
+          }")
+        
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        BODY=$(echo "$RESPONSE" | sed '$d')
+        
+        VALID=$(echo "$BODY" | jq -r '.valid // false')
+        REQUEST_ID=$(echo "$BODY" | jq -r '.requestId // empty')
+        APPROVAL_URL=$(echo "$BODY" | jq -r '.approvalUrl // empty')
+        
+        echo "approved=$VALID" >> "$GITHUB_OUTPUT"
+        echo "request-id=$REQUEST_ID" >> "$GITHUB_OUTPUT"
+        echo "approval-url=$APPROVAL_URL" >> "$GITHUB_OUTPUT"
+        
+        if [ "$VALID" = "true" ]; then
+          echo "✅ APPROVED - Receipt verified"
+          echo ""
+          echo "This deployment has been authorized."
+          echo "Merge allowed."
+        else
+          echo "❌ NO RECEIPT - Human approval required"
+          echo ""
+          echo "This PR changes protected deployment files."
+          echo "A human must approve before merge."
+          echo ""
+          if [ -n "$APPROVAL_URL" ]; then
+            echo "👉 APPROVE HERE: $APPROVAL_URL"
+          else
+            echo "👉 Go to: ${{ inputs.pp-base-url }}/pp/deploy-requests"
+          fi
+          echo ""
+          echo "After approval, re-run this workflow."
+          echo "═══════════════════════════════════════════════════════════"
+          exit 1
+        fi
+
+    - name: Skip (No protected paths)
+      if: steps.check.outputs.protected != 'true'
+      shell: bash
+      run: echo "✅ No protected paths changed - merge allowed"

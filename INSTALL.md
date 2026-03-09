@@ -15,6 +15,8 @@ No dependencies. No config files. One workflow, one secret.
 
 > 🔒 **Security note:** This key can create approval requests and verify receipts. It CANNOT approve requests or access other tenants. Least privilege by design.
 
+If you want **automatic deploy-request creation** when no receipt exists, also create a request-create token in Permission Protocol and keep it for Step 2.
+
 ---
 
 ## Step 2: Add Secret (30 sec)
@@ -22,6 +24,8 @@ No dependencies. No config files. One workflow, one secret.
 **Option A: GitHub CLI**
 ```bash
 gh secret set PP_API_KEY -b "pp_live_your_key_here"
+# Optional: enable auto-request creation on missing receipts
+gh secret set PP_REQUEST_CREATE_TOKEN -b "pp_req_create_..."
 ```
 
 **Option B: GitHub UI**
@@ -30,6 +34,7 @@ gh secret set PP_API_KEY -b "pp_live_your_key_here"
 3. Name: `PP_API_KEY`
 4. Value: paste your key
 5. Click **Add secret**
+6. Optional for auto-request creation: add `PP_REQUEST_CREATE_TOKEN`
 
 ---
 
@@ -52,6 +57,15 @@ jobs:
       - uses: permission-protocol/deploy-gate@v1
         with:
           pp-api-key: ${{ secrets.PP_API_KEY }}
+```
+
+Optional (auto-create request on missing receipt):
+
+```yaml
+      - uses: permission-protocol/deploy-gate@v1
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+          pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
 ```
 
 Commit and push.
