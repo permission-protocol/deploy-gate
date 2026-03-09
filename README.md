@@ -58,7 +58,7 @@
 
 **Blocks merges to `main` until a human approves.**
 
-Any PR touching protected paths (default: `deploy/*`, `.github/workflows/*`) requires cryptographic approval before merge. No approval = CI fails = merge blocked.
+Every PR to a protected branch creates a Permission Protocol request. Approval state is enforced via commit status, and protected-path matches are sent as risk metadata (not used for gating).
 
 ---
 
@@ -89,7 +89,7 @@ jobs:
 1. Get API key from [app.permissionprotocol.com](https://app.permissionprotocol.com)
 2. Add secret: `gh secret set PP_API_KEY -b "pp_live_..."`
 3. Add workflow above
-4. Open PR → Watch it fail → Approve → Merge
+4. Open PR → Permission request created automatically → approve if needed → merge
 
 ---
 
@@ -100,28 +100,20 @@ jobs:
 </p>
 
 ```
-   PR opened → changes deploy/ or .github/workflows/
-                        │
-                        ▼
-               ┌─────────────────┐
-               │  Receipt exist? │
-               └────────┬────────┘
-                        │
-          NO ───────────┴─────────── YES
-          │                           │
-          ▼                           ▼
-   ┌──────────────┐           ┌──────────────┐
-   │  ❌ CI FAILS │           │  ✅ MERGE OK │
-   │              │           └──────────────┘
-   │  Approval    │
-   │  URL in logs │
-   └──────┬───────┘
-          │
-          ▼
-   Human approves in dashboard
-          │
-          ▼
-   Re-run CI → ✅ Merge OK
+   PR opened
+      │
+      ▼
+   Deploy Gate verifies/creates PP request
+      │
+      ├─────────────── Auto-approved / verified ───────────────► ✅ Merge OK
+      │
+      └─────────────── Approval required ───────────────────────► ⏳ Pending status + PR comment with review link
+                                                                    │
+                                                                    ▼
+                                                             Human approves in dashboard
+                                                                    │
+                                                                    ▼
+                                                             Re-run CI → ✅ Merge OK
 ```
 
 ---
@@ -161,7 +153,7 @@ jobs:
 
 ### 4. Open a PR
 
-Touch a protected path. Watch it fail. Approve. Merge.
+Open any PR to the protected branch. Deploy Gate always creates/verifies a request and posts a PR comment with the receipt/review link.
 
 ---
 
@@ -175,10 +167,12 @@ Touch a protected path. Watch it fail. Approve. Merge.
 | `environment` | Environment bound to the receipt scope | `production` |
 | `capability` | Capability bound to the receipt scope | `deploy:production` |
 | `redeem` | Redeem receipt on verify (`false` for PR gate, `true` for deploy workflow) | `false` |
-| `protected-paths` | Regex for protected paths | `^(deploy/|\.github/workflows/)` |
+| `protected-paths` | Regex used for risk assessment metadata only (not gating) | `^(deploy/|\.github/workflows/)` |
 | `fail-on-missing` | Fail if no receipt | `true` |
+| `fail-open-timeout` | Seconds to wait before PP API fail-open | `30` |
+| `post-comment` | Post/update PR comment with receipt or approval link | `true` |
 
-### Custom Protected Paths
+### Risk Metadata Paths
 
 ```yaml
 - uses: permission-protocol/deploy-gate@v1
@@ -186,6 +180,7 @@ Touch a protected path. Watch it fail. Approve. Merge.
     pp-api-key: ${{ secrets.PP_API_KEY }}
     protected-paths: '^(src/critical/|infra/|\.env)'
 ```
+Protected path matches are forwarded to PP as `protectedPathsChanged` + `changedFiles` metadata for risk scoring.
 
 ## Advanced Usage
 
@@ -224,6 +219,20 @@ Use this when you want custom scope values and auto-request creation in one work
 
 - run: echo "Approval URL: ${{ steps.gate.outputs.approval-url }}"
   if: failure()
+```
+
+## PR Comment Example
+
+Auto-approved / verified:
+```markdown
+✅ **Permission Protocol:** Approved
+[View receipt →](https://permissionprotocol.com/review/{requestId})
+```
+
+Approval required:
+```markdown
+⏳ **Permission Protocol:** Approval required
+[Review & approve →](https://permissionprotocol.com/review/{requestId})
 ```
 
 ---
