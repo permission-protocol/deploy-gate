@@ -76,18 +76,18 @@ Commit and push.
 
 ```bash
 git checkout -b test-gate
-echo "# test" >> deploy/config.yml  # or any file in .github/workflows/
+echo "# test" >> README.md
 git add . && git commit -m "test: trigger deploy gate"
 git push origin test-gate
 ```
 
-Open a PR to `main`. Watch it fail. Click the approval link. Approve. Re-run.
+Open a PR to `main`. Deploy Gate always creates/verifies a PP request and posts a PR comment with the review link.
 
 **That's it. You're protected.**
 
 ---
 
-## What You'll See When It Fails
+## What You'll See In PRs
 
 ```
 ═══════════════════════════════════════════════════════════
@@ -96,13 +96,24 @@ Open a PR to `main`. Watch it fail. Click the approval link. Approve. Re-run.
 
 ❌ NO RECEIPT - Human approval required
 
-This PR changes protected deployment files.
 A human must approve before merge.
 
 👉 APPROVE HERE: https://permissionprotocol.com/review/dr_abc123
 
 After approval, re-run this workflow.
 ═══════════════════════════════════════════════════════════
+```
+
+PR comment (auto-approved / verified):
+```markdown
+✅ **Permission Protocol:** Approved
+[View receipt →](https://permissionprotocol.com/review/{requestId})
+```
+
+PR comment (approval required):
+```markdown
+⏳ **Permission Protocol:** Approval required
+[Review & approve →](https://permissionprotocol.com/review/{requestId})
 ```
 
 ---
@@ -134,19 +145,14 @@ Error: Request failed with status code 404
 - Go to [app.permissionprotocol.com](https://app.permissionprotocol.com)
 - Add your repo in **Settings → Repos**
 
-### No protected paths detected (action passes unexpectedly)
+### PP unavailable (fail-open)
 ```
-✅ No protected paths changed - merge allowed
+⚠️ PP unavailable - fail-open
 ```
-**Fix:** Your PR doesn't touch protected paths.
-- Default protected: `deploy/*` and `.github/workflows/*`
-- Customize with `protected-paths` input:
-```yaml
-- uses: permission-protocol/deploy-gate@v1
-  with:
-    pp-api-key: ${{ secrets.PP_API_KEY }}
-    protected-paths: '^(src/critical/|infra/|deploy/)'
-```
+**What it means:** Permission Protocol API did not respond before timeout (`fail-open-timeout`, default `30s`).
+- Deploy Gate sets commit status to success with `PP unavailable — fail-open`
+- Merge is not blocked by PP downtime
+- Retry later to restore normal gating behavior
 
 ### Workflow not triggering
 **Fix:** Make sure the workflow triggers on `pull_request` to `main`:
@@ -158,11 +164,11 @@ on:
 
 ---
 
-## Optional: Customize Protected Paths
+## Optional: Risk Metadata Paths
 
 Default protected paths: `deploy/` and `.github/workflows/`
 
-To protect different paths:
+To send different risk metadata signals:
 
 ```yaml
 - uses: permission-protocol/deploy-gate@v1
@@ -170,6 +176,7 @@ To protect different paths:
     pp-api-key: ${{ secrets.PP_API_KEY }}
     protected-paths: '^(src/critical/|infra/|k8s/|terraform/)'
 ```
+These paths are sent to PP as metadata and do not decide whether the gate runs.
 
 ---
 

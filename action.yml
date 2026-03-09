@@ -31,18 +31,26 @@ inputs:
     required: false
     default: 'false'
   protected-paths:
-    description: 'Regex pattern for protected paths (default: deploy/, .github/workflows/)'
+    description: 'Regex pattern for protected paths used for risk assessment metadata (not gating)'
     required: false
     default: '^(deploy/|\.github/workflows/)'
   fail-on-missing:
     description: 'Fail if no receipt exists'
     required: false
     default: 'true'
+  fail-open-timeout:
+    description: 'Seconds to wait for PP API before fail-open'
+    required: false
+    default: '30'
+  post-comment:
+    description: 'Post or update a Permission Protocol comment on PRs'
+    required: false
+    default: 'true'
 
 outputs:
   approved:
     description: 'Whether the deploy was approved'
-    value: ${{ steps.check.outputs.protected != 'true' && 'true' || steps.verify.outputs.approved }}
+    value: ${{ steps.verify.outputs.approved }}
   receipt-id:
     description: 'Receipt ID if returned by API'
     value: ${{ steps.verify.outputs.receipt-id }}
@@ -65,40 +73,8 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Check for protected paths
-      id: check
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        echo "🔍 Checking for protected paths..."
-
-        PROTECTED_REGEX="${{ inputs.protected-paths }}"
-        CHANGED_FILES=$(gh pr view "${{ github.event.pull_request.number }}" --json files --jq '.files[].path' 2>/dev/null || echo "")
-
-        if [ -z "$CHANGED_FILES" ]; then
-          echo "⚠️ Could not get changed files via GitHub API, falling back to git diff"
-          CHANGED_FILES=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" 2>/dev/null || echo "")
-        fi
-
-        echo "Changed files:"
-        echo "$CHANGED_FILES"
-
-        PROTECTED=$(echo "$CHANGED_FILES" | grep -E "$PROTECTED_REGEX" || true)
-        if [ -n "$PROTECTED" ]; then
-          echo "🔒 Protected paths detected:"
-          echo "$PROTECTED"
-          echo "protected=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "✅ No protected paths changed"
-          echo "protected=false" >> "$GITHUB_OUTPUT"
-        fi
-      env:
-        GH_TOKEN: ${{ github.token }}
-
     - name: Verify PP Receipt
       id: verify
-      if: steps.check.outputs.protected == 'true'
       shell: bash
       env:
         PP_BASE_URL: ${{ inputs.pp-base-url }}
@@ -108,10 +84,15 @@ runs:
         PP_CAPABILITY: ${{ inputs.capability }}
         PP_REDEEM: ${{ inputs.redeem }}
         PP_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        PP_PROTECTED_PATHS: ${{ inputs.protected-paths }}
+        PP_FAIL_OPEN_TIMEOUT: ${{ inputs.fail-open-timeout }}
+        PP_POST_COMMENT: ${{ inputs.post-comment }}
         PP_REPOSITORY: ${{ github.repository }}
         PP_PR_NUMBER: ${{ github.event.pull_request.number }}
         PP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PP_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         PP_RUN_ID: ${{ github.run_id }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
 
@@ -123,6 +104,82 @@ runs:
             echo "${value}"
             echo "__PP_EOF__"
           } >> "$GITHUB_OUTPUT"
+        }
+
+        set_commit_status() {
+          local state="$1"
+          local description="$2"
+          local url="${3:-}"
+          local status_url="https://api.github.com/repos/${{ github.repository }}/statuses/${PP_PR_HEAD_SHA}"
+          local body
+          if [ -n "$url" ]; then
+            body=$(jq -n --arg s "$state" --arg d "$description" --arg u "$url" \
+              '{state: $s, context: "Permission Protocol", description: $d, target_url: $u}')
+          else
+            body=$(jq -n --arg s "$state" --arg d "$description" \
+              '{state: $s, context: "Permission Protocol", description: $d}')
+          fi
+          curl -sS -X POST "$status_url" \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Content-Type: application/json" \
+            -d "$body" > /dev/null 2>&1 || echo "⚠️ Failed to set commit status (non-fatal)"
+        }
+
+        upsert_pr_comment() {
+          local state="$1"
+          local url="$2"
+
+          if [ "${PP_POST_COMMENT}" != "true" ] || [ -z "${PP_PR_NUMBER}" ]; then
+            return 0
+          fi
+
+          local marker="<!-- permission-protocol-comment -->"
+          local body
+          if [ "$state" = "approved" ]; then
+            body=$(printf "✅ **Permission Protocol:** Approved\n[View receipt →](%s)\n\n%s" "$url" "$marker")
+          else
+            body=$(printf "⏳ **Permission Protocol:** Approval required\n[Review & approve →](%s)\n\n%s" "$url" "$marker")
+          fi
+
+          local comments_url="https://api.github.com/repos/${{ github.repository }}/issues/${PP_PR_NUMBER}/comments?per_page=100"
+          local comments_response
+          comments_response=$(curl -sS \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "$comments_url" || true)
+
+          local comment_id
+          comment_id=$(echo "$comments_response" | jq -r '.[] | select((.body | contains("permission-protocol-comment")) or (.body | contains("**Permission Protocol:**"))) | .id' 2>/dev/null | head -n1 || true)
+
+          if [ -n "$comment_id" ]; then
+            curl -sS -X PATCH "https://api.github.com/repos/${{ github.repository }}/issues/comments/${comment_id}" \
+              -H "Authorization: token ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg body "$body" '{body: $body}')" > /dev/null 2>&1 || \
+              echo "⚠️ Failed to update PR comment (non-fatal)"
+          else
+            curl -sS -X POST "https://api.github.com/repos/${{ github.repository }}/issues/${PP_PR_NUMBER}/comments" \
+              -H "Authorization: token ${{ github.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg body "$body" '{body: $body}')" > /dev/null 2>&1 || \
+              echo "⚠️ Failed to post PR comment (non-fatal)"
+          fi
+        }
+
+        fail_open() {
+          local reason="$1"
+          echo "⚠️ PP unavailable - fail-open: ${reason}"
+          set_output "approved" "true"
+          set_output "receipt-id" ""
+          set_output "decision" ""
+          set_output "error-code" "PP_UNAVAILABLE"
+          set_output "error-message" "$reason"
+          set_output "request-id" ""
+          set_output "approval-url" ""
+          set_commit_status "success" "PP unavailable — fail-open"
+          exit 0
         }
 
         REPO="${PP_REPOSITORY,,}"
@@ -142,6 +199,29 @@ runs:
           FAIL_ON_MISSING_JSON=false
         fi
 
+        echo "🔍 Collecting changed files for risk metadata..."
+        CHANGED_FILES=$(gh pr view "${PP_PR_NUMBER}" --json files --jq '.files[].path' 2>/dev/null || echo "")
+        if [ -z "$CHANGED_FILES" ]; then
+          echo "⚠️ Could not get changed files via GitHub API, falling back to git diff"
+          CHANGED_FILES=$(git diff --name-only "${PP_PR_BASE_SHA}...${PP_PR_HEAD_SHA}" 2>/dev/null || echo "")
+        fi
+
+        if [ -n "$CHANGED_FILES" ]; then
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          CHANGED_FILES_JSON=$(echo "$CHANGED_FILES" | jq -R -s 'split("\n") | map(select(length > 0))')
+        else
+          CHANGED_FILES_JSON='[]'
+        fi
+
+        PROTECTED_PATHS_CHANGED=false
+        if [ -n "$CHANGED_FILES" ] && echo "$CHANGED_FILES" | grep -E "$PP_PROTECTED_PATHS" >/dev/null 2>&1; then
+          PROTECTED_PATHS_CHANGED=true
+          echo "Protected paths changed: true"
+        else
+          echo "Protected paths changed: false"
+        fi
+
         REQUEST_BODY=$(jq -n \
           --arg repo "$REPO" \
           --argjson prNumber "${PP_PR_NUMBER}" \
@@ -150,6 +230,8 @@ runs:
           --arg capability "$PP_CAPABILITY" \
           --argjson redeem "$REDEEM_JSON" \
           --argjson failOnMissing "$FAIL_ON_MISSING_JSON" \
+          --argjson protectedPathsChanged "$PROTECTED_PATHS_CHANGED" \
+          --argjson changedFiles "$CHANGED_FILES_JSON" \
           '{
             scope: {
               repo: $repo,
@@ -159,7 +241,9 @@ runs:
               capability: $capability
             },
             redeem: $redeem,
-            failOnMissing: $failOnMissing
+            failOnMissing: $failOnMissing,
+            protectedPathsChanged: $protectedPathsChanged,
+            changedFiles: $changedFiles
           }')
 
         echo "═══════════════════════════════════════════════════════════"
@@ -179,24 +263,24 @@ runs:
           CURL_HEADERS+=( -H "X-PP-Request-Create-Token: ${PP_REQUEST_CREATE_TOKEN}" )
         fi
 
+        set +e
         HTTP_RESPONSE=$(curl -sS -w "\n%{http_code}" \
+          --max-time "${PP_FAIL_OPEN_TIMEOUT}" \
           -X POST "${PP_BASE_URL}/api/v1/receipts/verify" \
           "${CURL_HEADERS[@]}" \
-          -d "${REQUEST_BODY}" || true)
+          -d "${REQUEST_BODY}")
+        CURL_EXIT=$?
+        set -e
+
+        if [ "$CURL_EXIT" -ne 0 ]; then
+          fail_open "API request failed (curl exit ${CURL_EXIT})"
+        fi
 
         HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
         HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
 
-        if [ -z "$HTTP_BODY" ]; then
-          set_output "approved" "false"
-          set_output "receipt-id" ""
-          set_output "decision" ""
-          set_output "error-code" "PP_UNAVAILABLE"
-          set_output "error-message" "Empty response from Permission Protocol"
-          set_output "request-id" ""
-          set_output "approval-url" ""
-          echo "❌ FAIL: Permission Protocol API unavailable"
-          exit 1
+        if [ -z "$HTTP_BODY" ] || [ "$HTTP_STATUS" = "000" ]; then
+          fail_open "Empty response from Permission Protocol"
         fi
 
         VALID=$(echo "$HTTP_BODY" | jq -r '.valid // .result.valid // false' 2>/dev/null || echo "false")
@@ -219,7 +303,6 @@ runs:
         DIAG_KEY_SOURCE=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keySource // .result.diagnostics.keySource // empty' 2>/dev/null || echo "")
         DIAG_KEY_STATUS=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keyStatus // .result.diagnostics.keyStatus // empty' 2>/dev/null || echo "")
 
-        # Override approval URL to use the shareable review page (not the dead /pp/c/ app path)
         if [ -n "$REQUEST_ID" ]; then
           REVIEW_URL="https://permissionprotocol.com/review/${REQUEST_ID}"
         else
@@ -239,26 +322,6 @@ runs:
           echo "Resolved company: id=${COMPANY_ID:-unknown} slug=${COMPANY_SLUG:-unknown} name=${COMPANY_NAME:-unknown}"
         fi
 
-        # Helper: set GitHub commit status for "Permission Protocol" required check
-        set_commit_status() {
-          local state="$1"
-          local description="$2"
-          local url="${3:-}"
-          local status_url="https://api.github.com/repos/${{ github.repository }}/statuses/${PP_PR_HEAD_SHA}"
-          local body
-          if [ -n "$url" ]; then
-            body=$(jq -n --arg s "$state" --arg d "$description" --arg u "$url" \
-              '{state: $s, context: "Permission Protocol", description: $d, target_url: $u}')
-          else
-            body=$(jq -n --arg s "$state" --arg d "$description" \
-              '{state: $s, context: "Permission Protocol", description: $d}')
-          fi
-          curl -sS -X POST "$status_url" \
-            -H "Authorization: token ${{ github.token }}" \
-            -H "Content-Type: application/json" \
-            -d "$body" > /dev/null 2>&1 || echo "⚠️ Failed to set commit status (non-fatal)"
-        }
-
         if [ "$VALID" = "true" ]; then
           echo "✅ APPROVED - Receipt verified"
           if [ -n "$RECEIPT_ID" ]; then
@@ -268,6 +331,9 @@ runs:
             echo "Decision: ${DECISION}"
           fi
           set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
+          if [ -n "$REVIEW_URL" ]; then
+            upsert_pr_comment "approved" "$REVIEW_URL"
+          fi
           exit 0
         fi
 
@@ -279,6 +345,7 @@ runs:
             fi
             if [ -n "$REVIEW_URL" ]; then
               echo "👉 APPROVE HERE: ${REVIEW_URL}"
+              upsert_pr_comment "pending" "$REVIEW_URL"
             else
               echo "👉 Go to: https://permissionprotocol.com/review"
             fi
@@ -342,21 +409,3 @@ runs:
             exit 1
             ;;
         esac
-
-    - name: Skip (No protected paths)
-      if: steps.check.outputs.protected != 'true'
-      shell: bash
-      run: |
-        echo "✅ No protected paths changed - merge allowed"
-
-        # Set commit status so "Permission Protocol" required check passes
-        SHA="${{ github.event.pull_request.head.sha }}"
-        STATUS_URL="https://api.github.com/repos/${{ github.repository }}/statuses/${SHA}"
-        curl -sS -X POST "$STATUS_URL" \
-          -H "Authorization: token ${{ github.token }}" \
-          -H "Content-Type: application/json" \
-          -d '{
-            "state": "success",
-            "context": "Permission Protocol",
-            "description": "No protected paths changed"
-          }' > /dev/null 2>&1 || echo "⚠️ Failed to set commit status (non-fatal)"
