@@ -219,18 +219,45 @@ runs:
         DIAG_KEY_SOURCE=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keySource // .result.diagnostics.keySource // empty' 2>/dev/null || echo "")
         DIAG_KEY_STATUS=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keyStatus // .result.diagnostics.keyStatus // empty' 2>/dev/null || echo "")
 
+        # Override approval URL to use the shareable review page (not the dead /pp/c/ app path)
+        if [ -n "$REQUEST_ID" ]; then
+          REVIEW_URL="https://permissionprotocol.com/review/${REQUEST_ID}"
+        else
+          REVIEW_URL="$APPROVAL_URL"
+        fi
+
         set_output "approved" "$VALID"
         set_output "receipt-id" "$RECEIPT_ID"
         set_output "decision" "$DECISION"
         set_output "error-code" "$ERROR_CODE"
         set_output "error-message" "$ERROR_MESSAGE"
         set_output "request-id" "$REQUEST_ID"
-        set_output "approval-url" "$APPROVAL_URL"
+        set_output "approval-url" "$REVIEW_URL"
 
         echo "API response status: ${HTTP_STATUS}"
         if [ -n "$COMPANY_ID" ] || [ -n "$COMPANY_SLUG" ] || [ -n "$COMPANY_NAME" ]; then
           echo "Resolved company: id=${COMPANY_ID:-unknown} slug=${COMPANY_SLUG:-unknown} name=${COMPANY_NAME:-unknown}"
         fi
+
+        # Helper: set GitHub commit status for "Permission Protocol" required check
+        set_commit_status() {
+          local state="$1"
+          local description="$2"
+          local url="${3:-}"
+          local status_url="https://api.github.com/repos/${{ github.repository }}/statuses/${PP_PR_HEAD_SHA}"
+          local body
+          if [ -n "$url" ]; then
+            body=$(jq -n --arg s "$state" --arg d "$description" --arg u "$url" \
+              '{state: $s, context: "Permission Protocol", description: $d, target_url: $u}')
+          else
+            body=$(jq -n --arg s "$state" --arg d "$description" \
+              '{state: $s, context: "Permission Protocol", description: $d}')
+          fi
+          curl -sS -X POST "$status_url" \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Content-Type: application/json" \
+            -d "$body" > /dev/null 2>&1 || echo "⚠️ Failed to set commit status (non-fatal)"
+        }
 
         if [ "$VALID" = "true" ]; then
           echo "✅ APPROVED - Receipt verified"
@@ -240,6 +267,7 @@ runs:
           if [ -n "$DECISION" ]; then
             echo "Decision: ${DECISION}"
           fi
+          set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
           exit 0
         fi
 
@@ -249,14 +277,15 @@ runs:
             if [ -n "$REQUEST_ID" ]; then
               echo "Request ID: ${REQUEST_ID}"
             fi
-            if [ -n "$APPROVAL_URL" ]; then
-              echo "👉 APPROVE HERE: ${APPROVAL_URL}"
+            if [ -n "$REVIEW_URL" ]; then
+              echo "👉 APPROVE HERE: ${REVIEW_URL}"
             else
-              echo "👉 Go to: ${PP_BASE_URL}/pp/deploy-requests"
+              echo "👉 Go to: https://permissionprotocol.com/review"
             fi
             if [ -n "$SKIP_REASON" ]; then
               echo "Request creation skipped: ${SKIP_REASON}"
             fi
+            set_commit_status "pending" "Waiting for approval" "$REVIEW_URL"
             if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
               echo "⚡ Continuing (fail-on-missing=false)"
               exit 0
@@ -319,3 +348,15 @@ runs:
       shell: bash
       run: |
         echo "✅ No protected paths changed - merge allowed"
+
+        # Set commit status so "Permission Protocol" required check passes
+        SHA="${{ github.event.pull_request.head.sha }}"
+        STATUS_URL="https://api.github.com/repos/${{ github.repository }}/statuses/${SHA}"
+        curl -sS -X POST "$STATUS_URL" \
+          -H "Authorization: token ${{ github.token }}" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "state": "success",
+            "context": "Permission Protocol",
+            "description": "No protected paths changed"
+          }' > /dev/null 2>&1 || echo "⚠️ Failed to set commit status (non-fatal)"
