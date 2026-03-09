@@ -99,7 +99,7 @@ Open a PR to `main`. Watch it fail. Click the approval link. Approve. Re-run.
 This PR changes protected deployment files.
 A human must approve before merge.
 
-👉 APPROVE HERE: https://app.permissionprotocol.com/pp/deploy-requests/dr_abc123
+👉 APPROVE HERE: https://permissionprotocol.com/review/dr_abc123
 
 After approval, re-run this workflow.
 ═══════════════════════════════════════════════════════════
