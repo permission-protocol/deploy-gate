@@ -14,19 +14,47 @@ inputs:
     description: 'Permission Protocol base URL'
     required: false
     default: 'https://app.permissionprotocol.com'
+  pp-request-create-token:
+    description: 'Optional token to auto-create deploy requests when no receipt exists'
+    required: false
+    default: ''
+  environment:
+    description: 'Deployment environment'
+    required: false
+    default: 'production'
+  capability:
+    description: 'Capability required for this gate'
+    required: false
+    default: 'deploy:production'
+  redeem:
+    description: 'Redeem receipt on verify (use false for PR gates, true for deploy workflows)'
+    required: false
+    default: 'false'
   protected-paths:
     description: 'Regex pattern for protected paths (default: deploy/, .github/workflows/)'
     required: false
     default: '^(deploy/|\.github/workflows/)'
   fail-on-missing:
-    description: 'Fail if no receipt exists (creates approval request)'
+    description: 'Fail if no receipt exists'
     required: false
     default: 'true'
 
 outputs:
   approved:
     description: 'Whether the deploy was approved'
-    value: ${{ steps.verify.outputs.approved }}
+    value: ${{ steps.check.outputs.protected != 'true' && 'true' || steps.verify.outputs.approved }}
+  receipt-id:
+    description: 'Receipt ID if returned by API'
+    value: ${{ steps.verify.outputs.receipt-id }}
+  decision:
+    description: 'Decision from receipt (APPROVED/DENIED/PENDING)'
+    value: ${{ steps.verify.outputs.decision }}
+  error-code:
+    description: 'Error code from verification response'
+    value: ${{ steps.verify.outputs.error-code }}
+  error-message:
+    description: 'Error message from verification response'
+    value: ${{ steps.verify.outputs.error-message }}
   request-id:
     description: 'Deploy request ID (if created)'
     value: ${{ steps.verify.outputs.request-id }}
@@ -41,19 +69,21 @@ runs:
       id: check
       shell: bash
       run: |
+        set -euo pipefail
+
         echo "🔍 Checking for protected paths..."
-        
+
         PROTECTED_REGEX="${{ inputs.protected-paths }}"
-        CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files --jq '.files[].path' 2>/dev/null || echo "")
-        
+        CHANGED_FILES=$(gh pr view "${{ github.event.pull_request.number }}" --json files --jq '.files[].path' 2>/dev/null || echo "")
+
         if [ -z "$CHANGED_FILES" ]; then
-          echo "⚠️ Could not get changed files, checking all"
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} 2>/dev/null || echo "")
+          echo "⚠️ Could not get changed files via GitHub API, falling back to git diff"
+          CHANGED_FILES=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" 2>/dev/null || echo "")
         fi
-        
+
         echo "Changed files:"
         echo "$CHANGED_FILES"
-        
+
         PROTECTED=$(echo "$CHANGED_FILES" | grep -E "$PROTECTED_REGEX" || true)
         if [ -n "$PROTECTED" ]; then
           echo "🔒 Protected paths detected:"
@@ -70,67 +100,222 @@ runs:
       id: verify
       if: steps.check.outputs.protected == 'true'
       shell: bash
+      env:
+        PP_BASE_URL: ${{ inputs.pp-base-url }}
+        PP_API_KEY: ${{ inputs.pp-api-key }}
+        PP_REQUEST_CREATE_TOKEN: ${{ inputs.pp-request-create-token }}
+        PP_ENVIRONMENT: ${{ inputs.environment }}
+        PP_CAPABILITY: ${{ inputs.capability }}
+        PP_REDEEM: ${{ inputs.redeem }}
+        PP_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        PP_REPOSITORY: ${{ github.repository }}
+        PP_PR_NUMBER: ${{ github.event.pull_request.number }}
+        PP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PP_RUN_ID: ${{ github.run_id }}
       run: |
+        set -euo pipefail
+
+        set_output() {
+          local key="$1"
+          local value="${2:-}"
+          {
+            echo "${key}<<__PP_EOF__"
+            echo "${value}"
+            echo "__PP_EOF__"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        REPO="${PP_REPOSITORY,,}"
+
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "❌ jq is required for this action"
+          exit 1
+        fi
+
+        REDEEM_JSON=false
+        if [ "${PP_REDEEM}" = "true" ]; then
+          REDEEM_JSON=true
+        fi
+
+        FAIL_ON_MISSING_JSON=true
+        if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
+          FAIL_ON_MISSING_JSON=false
+        fi
+
+        REQUEST_BODY=$(jq -n \
+          --arg repo "$REPO" \
+          --argjson prNumber "${PP_PR_NUMBER}" \
+          --arg headSha "$PP_PR_HEAD_SHA" \
+          --arg env "$PP_ENVIRONMENT" \
+          --arg capability "$PP_CAPABILITY" \
+          --argjson redeem "$REDEEM_JSON" \
+          --argjson failOnMissing "$FAIL_ON_MISSING_JSON" \
+          '{
+            scope: {
+              repo: $repo,
+              prNumber: $prNumber,
+              headSha: $headSha,
+              env: $env,
+              capability: $capability
+            },
+            redeem: $redeem,
+            failOnMissing: $failOnMissing
+          }')
+
         echo "═══════════════════════════════════════════════════════════"
         echo "  🔐 PERMISSION PROTOCOL - Deploy Authorization Required"
         echo "═══════════════════════════════════════════════════════════"
         echo ""
-        
-        REPO="${{ github.repository }}"
-        REPO="${REPO,,}"
-        SHA="${{ github.event.pull_request.head.sha }}"
-        PR="${{ github.event.pull_request.number }}"
-        
-        RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-          "${{ inputs.pp-base-url }}/api/v1/receipts/verify" \
-          -H "X-PP-API-Key: ${{ inputs.pp-api-key }}" \
-          -H "Content-Type: application/json" \
-          -d "{
-            \"scope\": {
-              \"repo\": \"${REPO}\",
-              \"prNumber\": ${PR},
-              \"headSha\": \"${SHA}\",
-              \"env\": \"production\",
-              \"capability\": \"deploy:production\"
-            },
-            \"redeem\": false,
-            \"failOnMissing\": ${{ inputs.fail-on-missing }}
-          }")
-        
-        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-        BODY=$(echo "$RESPONSE" | sed '$d')
-        
-        VALID=$(echo "$BODY" | jq -r '.valid // false')
-        REQUEST_ID=$(echo "$BODY" | jq -r '.requestId // empty')
-        APPROVAL_URL=$(echo "$BODY" | jq -r '.approvalUrl // empty')
-        
-        echo "approved=$VALID" >> "$GITHUB_OUTPUT"
-        echo "request-id=$REQUEST_ID" >> "$GITHUB_OUTPUT"
-        echo "approval-url=$APPROVAL_URL" >> "$GITHUB_OUTPUT"
-        
-        if [ "$VALID" = "true" ]; then
-          echo "✅ APPROVED - Receipt verified"
-          echo ""
-          echo "This deployment has been authorized."
-          echo "Merge allowed."
-        else
-          echo "❌ NO RECEIPT - Human approval required"
-          echo ""
-          echo "This PR changes protected deployment files."
-          echo "A human must approve before merge."
-          echo ""
-          if [ -n "$APPROVAL_URL" ]; then
-            echo "👉 APPROVE HERE: $APPROVAL_URL"
-          else
-            echo "👉 Go to: ${{ inputs.pp-base-url }}/pp/deploy-requests"
-          fi
-          echo ""
-          echo "After approval, re-run this workflow."
-          echo "═══════════════════════════════════════════════════════════"
+        echo "Scope: repo=${REPO}, pr=${PP_PR_NUMBER}, headSha=${PP_PR_HEAD_SHA}"
+
+        CURL_HEADERS=(
+          -H "Content-Type: application/json"
+          -H "X-PP-API-Key: ${PP_API_KEY}"
+          -H "X-PP-Request-Source: github-actions"
+          -H "X-GitHub-Run-Id: ${PP_RUN_ID}"
+        )
+
+        if [ -n "${PP_REQUEST_CREATE_TOKEN}" ]; then
+          CURL_HEADERS+=( -H "X-PP-Request-Create-Token: ${PP_REQUEST_CREATE_TOKEN}" )
+        fi
+
+        HTTP_RESPONSE=$(curl -sS -w "\n%{http_code}" \
+          -X POST "${PP_BASE_URL}/api/v1/receipts/verify" \
+          "${CURL_HEADERS[@]}" \
+          -d "${REQUEST_BODY}" || true)
+
+        HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+        HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
+
+        if [ -z "$HTTP_BODY" ]; then
+          set_output "approved" "false"
+          set_output "receipt-id" ""
+          set_output "decision" ""
+          set_output "error-code" "PP_UNAVAILABLE"
+          set_output "error-message" "Empty response from Permission Protocol"
+          set_output "request-id" ""
+          set_output "approval-url" ""
+          echo "❌ FAIL: Permission Protocol API unavailable"
           exit 1
         fi
+
+        VALID=$(echo "$HTTP_BODY" | jq -r '.valid // .result.valid // false' 2>/dev/null || echo "false")
+        RECEIPT_ID=$(echo "$HTTP_BODY" | jq -r '.receiptId // .receipt.id // .result.receiptId // .result.receipt.id // empty' 2>/dev/null || echo "")
+        DECISION=$(echo "$HTTP_BODY" | jq -r '.decision // .result.decision // empty' 2>/dev/null || echo "")
+        ERROR_CODE=$(echo "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null || echo "")
+        ERROR_MESSAGE=$(echo "$HTTP_BODY" | jq -r '.errorMessage // .result.errorMessage // .error.message // empty' 2>/dev/null || echo "")
+        REQUEST_ID=$(echo "$HTTP_BODY" | jq -r '.requestId // .result.requestId // empty' 2>/dev/null || echo "")
+        APPROVAL_URL=$(echo "$HTTP_BODY" | jq -r '.approvalUrl // .result.approvalUrl // empty' 2>/dev/null || echo "")
+        SKIP_REASON=$(echo "$HTTP_BODY" | jq -r '.creationSkippedReason // .result.creationSkippedReason // empty' 2>/dev/null || echo "")
+
+        COMPANY_ID=$(echo "$HTTP_BODY" | jq -r '.company.id // .result.company.id // empty' 2>/dev/null || echo "")
+        COMPANY_SLUG=$(echo "$HTTP_BODY" | jq -r '.company.slug // .result.company.slug // empty' 2>/dev/null || echo "")
+        COMPANY_NAME=$(echo "$HTTP_BODY" | jq -r '.company.name // .result.company.name // empty' 2>/dev/null || echo "")
+
+        DIAG_REQUESTED_COMPANY_ID=$(echo "$HTTP_BODY" | jq -r '.diagnostics.requestedCompanyId // .result.diagnostics.requestedCompanyId // empty' 2>/dev/null || echo "")
+        DIAG_RESOLVED_COMPANY_ID=$(echo "$HTTP_BODY" | jq -r '.diagnostics.resolvedCompanyId // .result.diagnostics.resolvedCompanyId // empty' 2>/dev/null || echo "")
+        DIAG_SIGNER_KEY_ID=$(echo "$HTTP_BODY" | jq -r '.diagnostics.signerKeyId // .result.diagnostics.signerKeyId // empty' 2>/dev/null || echo "")
+        DIAG_VERIFIER_KEY_ID=$(echo "$HTTP_BODY" | jq -r '.diagnostics.verifierKeyId // .result.diagnostics.verifierKeyId // empty' 2>/dev/null || echo "")
+        DIAG_KEY_SOURCE=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keySource // .result.diagnostics.keySource // empty' 2>/dev/null || echo "")
+        DIAG_KEY_STATUS=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keyStatus // .result.diagnostics.keyStatus // empty' 2>/dev/null || echo "")
+
+        set_output "approved" "$VALID"
+        set_output "receipt-id" "$RECEIPT_ID"
+        set_output "decision" "$DECISION"
+        set_output "error-code" "$ERROR_CODE"
+        set_output "error-message" "$ERROR_MESSAGE"
+        set_output "request-id" "$REQUEST_ID"
+        set_output "approval-url" "$APPROVAL_URL"
+
+        echo "API response status: ${HTTP_STATUS}"
+        if [ -n "$COMPANY_ID" ] || [ -n "$COMPANY_SLUG" ] || [ -n "$COMPANY_NAME" ]; then
+          echo "Resolved company: id=${COMPANY_ID:-unknown} slug=${COMPANY_SLUG:-unknown} name=${COMPANY_NAME:-unknown}"
+        fi
+
+        if [ "$VALID" = "true" ]; then
+          echo "✅ APPROVED - Receipt verified"
+          if [ -n "$RECEIPT_ID" ]; then
+            echo "Receipt ID: ${RECEIPT_ID}"
+          fi
+          if [ -n "$DECISION" ]; then
+            echo "Decision: ${DECISION}"
+          fi
+          exit 0
+        fi
+
+        case "$ERROR_CODE" in
+          "RECEIPT_NOT_FOUND"|"PP_NO_RECEIPT")
+            echo "❌ NO RECEIPT - Human approval required"
+            if [ -n "$REQUEST_ID" ]; then
+              echo "Request ID: ${REQUEST_ID}"
+            fi
+            if [ -n "$APPROVAL_URL" ]; then
+              echo "👉 APPROVE HERE: ${APPROVAL_URL}"
+            else
+              echo "👉 Go to: ${PP_BASE_URL}/pp/deploy-requests"
+            fi
+            if [ -n "$SKIP_REASON" ]; then
+              echo "Request creation skipped: ${SKIP_REASON}"
+            fi
+            if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
+              echo "⚡ Continuing (fail-on-missing=false)"
+              exit 0
+            fi
+            exit 1
+            ;;
+          "RECEIPT_ALREADY_REDEEMED")
+            echo "❌ FAIL: Receipt already redeemed"
+            echo "This permission has already been consumed."
+            exit 1
+            ;;
+          "RECEIPT_EXPIRED")
+            echo "❌ FAIL: Receipt expired"
+            echo "Request a new approval and re-run."
+            exit 1
+            ;;
+          "RECEIPT_DENIED")
+            echo "❌ FAIL: Receipt denied"
+            if [ -n "$ERROR_MESSAGE" ]; then
+              echo "$ERROR_MESSAGE"
+            fi
+            exit 1
+            ;;
+          "SIGNATURE_INVALID"|"KEY_REVOKED")
+            echo "❌ FAIL: Signature verification failed (${ERROR_CODE})"
+            if [ -n "$ERROR_MESSAGE" ]; then
+              echo "$ERROR_MESSAGE"
+            fi
+            if [ -n "$DIAG_REQUESTED_COMPANY_ID" ] || [ -n "$DIAG_RESOLVED_COMPANY_ID" ]; then
+              echo "Diagnostics company IDs: requested=${DIAG_REQUESTED_COMPANY_ID:-none} resolved=${DIAG_RESOLVED_COMPANY_ID:-none}"
+            fi
+            if [ -n "$DIAG_SIGNER_KEY_ID" ] || [ -n "$DIAG_VERIFIER_KEY_ID" ]; then
+              echo "Diagnostics key IDs: signer=${DIAG_SIGNER_KEY_ID:-none} verifier=${DIAG_VERIFIER_KEY_ID:-none}"
+            fi
+            if [ -n "$DIAG_KEY_SOURCE" ] || [ -n "$DIAG_KEY_STATUS" ]; then
+              echo "Diagnostics key source/status: ${DIAG_KEY_SOURCE:-none}/${DIAG_KEY_STATUS:-none}"
+            fi
+            exit 1
+            ;;
+          "")
+            echo "❌ FAIL: Verification failed"
+            if [ -n "$ERROR_MESSAGE" ]; then
+              echo "$ERROR_MESSAGE"
+            fi
+            echo "Raw response:"
+            echo "$HTTP_BODY" | jq '.' || echo "$HTTP_BODY"
+            exit 1
+            ;;
+          *)
+            echo "❌ FAIL: ${ERROR_CODE}"
+            if [ -n "$ERROR_MESSAGE" ]; then
+              echo "$ERROR_MESSAGE"
+            fi
+            exit 1
+            ;;
+        esac
 
     - name: Skip (No protected paths)
       if: steps.check.outputs.protected != 'true'
       shell: bash
-      run: echo "✅ No protected paths changed - merge allowed"
+      run: |
+        echo "✅ No protected paths changed - merge allowed"

@@ -171,7 +171,11 @@ Touch a protected path. Watch it fail. Approve. Merge.
 |-------|-------------|---------|
 | `pp-api-key` | Your Permission Protocol API key | **Required** |
 | `pp-base-url` | PP API base URL | `https://app.permissionprotocol.com` |
-| `protected-paths` | Regex for protected paths | `^(deploy/\|\.github/workflows/)` |
+| `pp-request-create-token` | Optional token to auto-create approval requests when receipts are missing | `''` |
+| `environment` | Environment bound to the receipt scope | `production` |
+| `capability` | Capability bound to the receipt scope | `deploy:production` |
+| `redeem` | Redeem receipt on verify (`false` for PR gate, `true` for deploy workflow) | `false` |
+| `protected-paths` | Regex for protected paths | `^(deploy/|\.github/workflows/)` |
 | `fail-on-missing` | Fail if no receipt | `true` |
 
 ### Custom Protected Paths
@@ -183,6 +187,21 @@ Touch a protected path. Watch it fail. Approve. Merge.
     protected-paths: '^(src/critical/|infra/|\.env)'
 ```
 
+## Advanced Usage
+
+Use this when you want custom scope values and auto-request creation in one workflow.
+
+```yaml
+- uses: permission-protocol/deploy-gate@v1
+  with:
+    pp-api-key: ${{ secrets.PP_API_KEY }}
+    pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
+    environment: production
+    capability: deploy:production
+    redeem: false
+    fail-on-missing: true
+```
+
 ---
 
 ## Outputs
@@ -190,6 +209,10 @@ Touch a protected path. Watch it fail. Approve. Merge.
 | Output | Description |
 |--------|-------------|
 | `approved` | `true` if approved, `false` otherwise |
+| `receipt-id` | Receipt ID when a receipt is found |
+| `decision` | Decision from receipt (`APPROVED`, `DENIED`, `PENDING`) |
+| `error-code` | API error code when verification fails |
+| `error-message` | API error message when verification fails |
 | `request-id` | Deploy request ID (if created) |
 | `approval-url` | URL to approve the deploy |
 
