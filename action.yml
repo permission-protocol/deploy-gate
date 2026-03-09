@@ -224,8 +224,17 @@ runs:
         set_output "decision" "$DECISION"
         set_output "error-code" "$ERROR_CODE"
         set_output "error-message" "$ERROR_MESSAGE"
+        DIRECT_APPROVAL_URL=""
+        if [ -n "$REQUEST_ID" ]; then
+          DIRECT_APPROVAL_URL="https://app.permissionprotocol.com/review/${REQUEST_ID}"
+        fi
+
+        if [ -n "$DIRECT_APPROVAL_URL" ]; then
+          set_output "approval-url" "$DIRECT_APPROVAL_URL"
+        else
+          set_output "approval-url" "$APPROVAL_URL"
+        fi
         set_output "request-id" "$REQUEST_ID"
-        set_output "approval-url" "$APPROVAL_URL"
 
         echo "API response status: ${HTTP_STATUS}"
         if [ -n "$COMPANY_ID" ] || [ -n "$COMPANY_SLUG" ] || [ -n "$COMPANY_NAME" ]; then
@@ -249,8 +258,10 @@ runs:
             if [ -n "$REQUEST_ID" ]; then
               echo "Request ID: ${REQUEST_ID}"
             fi
-            if [ -n "$APPROVAL_URL" ]; then
-              echo "👉 APPROVE HERE: ${APPROVAL_URL}"
+            if [ -n "$DIRECT_APPROVAL_URL" ]; then
+              echo "Approve here: ${DIRECT_APPROVAL_URL}"
+            elif [ -n "$APPROVAL_URL" ]; then
+              echo "Approve here: ${APPROVAL_URL}"
             else
               echo "👉 Go to: ${PP_BASE_URL}/pp/deploy-requests"
             fi
