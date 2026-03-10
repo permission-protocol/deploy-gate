@@ -284,6 +284,7 @@ runs:
         fi
 
         VALID=$(echo "$HTTP_BODY" | jq -r '.valid // .result.valid // false' 2>/dev/null || echo "false")
+        CARRIED_FORWARD=$(echo "$HTTP_BODY" | jq -r '.carriedForward // .result.carriedForward // false' 2>/dev/null || echo "false")
         RECEIPT_ID=$(echo "$HTTP_BODY" | jq -r '.receiptId // .receipt.id // .result.receiptId // .result.receipt.id // empty' 2>/dev/null || echo "")
         DECISION=$(echo "$HTTP_BODY" | jq -r '.decision // .result.decision // empty' 2>/dev/null || echo "")
         ERROR_CODE=$(echo "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null || echo "")
@@ -323,14 +324,19 @@ runs:
         fi
 
         if [ "$VALID" = "true" ]; then
-          echo "✅ APPROVED - Receipt verified"
+          if [ "$CARRIED_FORWARD" = "true" ]; then
+            echo "✅ APPROVED - Carried forward from PR-level approval"
+            set_commit_status "success" "Deploy approved — PR approval carried forward" "$REVIEW_URL"
+          else
+            echo "✅ APPROVED - Receipt verified"
+            set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
+          fi
           if [ -n "$RECEIPT_ID" ]; then
             echo "Receipt ID: ${RECEIPT_ID}"
           fi
           if [ -n "$DECISION" ]; then
             echo "Decision: ${DECISION}"
           fi
-          set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
           if [ -n "$REVIEW_URL" ]; then
             upsert_pr_comment "approved" "$REVIEW_URL"
           fi
