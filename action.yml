@@ -106,25 +106,6 @@ runs:
           } >> "$GITHUB_OUTPUT"
         }
 
-        set_commit_status() {
-          local state="$1"
-          local description="$2"
-          local url="${3:-}"
-          local status_url="https://api.github.com/repos/${{ github.repository }}/statuses/${PP_PR_HEAD_SHA}"
-          local body
-          if [ -n "$url" ]; then
-            body=$(jq -n --arg s "$state" --arg d "$description" --arg u "$url" \
-              '{state: $s, context: "Permission Protocol", description: $d, target_url: $u}')
-          else
-            body=$(jq -n --arg s "$state" --arg d "$description" \
-              '{state: $s, context: "Permission Protocol", description: $d}')
-          fi
-          curl -sS -X POST "$status_url" \
-            -H "Authorization: token ${{ github.token }}" \
-            -H "Content-Type: application/json" \
-            -d "$body" > /dev/null 2>&1 || echo "⚠️ Failed to set commit status (non-fatal)"
-        }
-
         upsert_pr_comment() {
           local state="$1"
           local url="$2"
@@ -178,7 +159,6 @@ runs:
           set_output "error-message" "$reason"
           set_output "request-id" ""
           set_output "approval-url" ""
-          set_commit_status "success" "PP unavailable — fail-open"
           exit 0
         }
 
@@ -333,11 +313,6 @@ runs:
           echo ""
           echo "═══════════════════════════════════════════════════════════"
 
-          if [ "$CARRIED_FORWARD" = "true" ]; then
-            set_commit_status "success" "Deploy approved — PR approval carried forward" "$REVIEW_URL"
-          else
-            set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
-          fi
           if [ -n "$REVIEW_URL" ]; then
             upsert_pr_comment "approved" "$REVIEW_URL"
           fi
@@ -373,7 +348,6 @@ runs:
             if [ -n "$REVIEW_URL" ]; then
               upsert_pr_comment "pending" "$REVIEW_URL"
             fi
-            set_commit_status "pending" "Waiting for approval" "$REVIEW_URL"
             if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
               echo "⚡ Continuing (fail-on-missing=false)"
               exit 0
