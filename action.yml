@@ -246,11 +246,10 @@ runs:
             changedFiles: $changedFiles
           }')
 
+        echo ""
         echo "═══════════════════════════════════════════════════════════"
         echo "  🔐 PERMISSION PROTOCOL - Deploy Authorization Required"
         echo "═══════════════════════════════════════════════════════════"
-        echo ""
-        echo "Scope: repo=${REPO}, pr=${PP_PR_NUMBER}, headSha=${PP_PR_HEAD_SHA}"
 
         CURL_HEADERS=(
           -H "Content-Type: application/json"
@@ -318,24 +317,26 @@ runs:
         set_output "request-id" "$REQUEST_ID"
         set_output "approval-url" "$REVIEW_URL"
 
-        echo "API response status: ${HTTP_STATUS}"
-        if [ -n "$COMPANY_ID" ] || [ -n "$COMPANY_SLUG" ] || [ -n "$COMPANY_NAME" ]; then
-          echo "Resolved company: id=${COMPANY_ID:-unknown} slug=${COMPANY_SLUG:-unknown} name=${COMPANY_NAME:-unknown}"
-        fi
-
         if [ "$VALID" = "true" ]; then
+          echo ""
           if [ "$CARRIED_FORWARD" = "true" ]; then
-            echo "✅ APPROVED - Carried forward from PR-level approval"
-            set_commit_status "success" "Deploy approved — PR approval carried forward" "$REVIEW_URL"
+            echo "  ✅ APPROVED — Carried forward from PR-level approval"
           else
-            echo "✅ APPROVED - Receipt verified"
-            set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
+            echo "  ✅ APPROVED — Receipt verified"
           fi
           if [ -n "$RECEIPT_ID" ]; then
-            echo "Receipt ID: ${RECEIPT_ID}"
+            echo "  📋 Receipt: ${RECEIPT_ID}"
           fi
-          if [ -n "$DECISION" ]; then
-            echo "Decision: ${DECISION}"
+          if [ -n "$REVIEW_URL" ]; then
+            echo "  🔗 ${REVIEW_URL}"
+          fi
+          echo ""
+          echo "═══════════════════════════════════════════════════════════"
+
+          if [ "$CARRIED_FORWARD" = "true" ]; then
+            set_commit_status "success" "Deploy approved — PR approval carried forward" "$REVIEW_URL"
+          else
+            set_commit_status "success" "Deploy approved — receipt verified" "$REVIEW_URL"
           fi
           if [ -n "$REVIEW_URL" ]; then
             upsert_pr_comment "approved" "$REVIEW_URL"
@@ -345,18 +346,32 @@ runs:
 
         case "$ERROR_CODE" in
           "RECEIPT_NOT_FOUND"|"PP_NO_RECEIPT")
-            echo "❌ NO RECEIPT - Human approval required"
-            if [ -n "$REQUEST_ID" ]; then
-              echo "Request ID: ${REQUEST_ID}"
-            fi
+            echo ""
+            echo "  ❌ NO RECEIPT — Human approval required"
+            echo ""
             if [ -n "$REVIEW_URL" ]; then
-              echo "👉 APPROVE HERE: ${REVIEW_URL}"
-              upsert_pr_comment "pending" "$REVIEW_URL"
+              echo "  👉 APPROVE HERE:"
+              echo "     ${REVIEW_URL}"
+              echo ""
             else
-              echo "👉 Go to: https://permissionprotocol.com/review"
+              echo "  👉 https://permissionprotocol.com/review"
+              echo ""
+            fi
+            echo "═══════════════════════════════════════════════════════════"
+            echo ""
+            # Details (collapsed in logs, visible if expanded)
+            echo "Details: repo=${REPO} pr=#${PP_PR_NUMBER} sha=${PP_PR_HEAD_SHA:0:10}"
+            if [ -n "$REQUEST_ID" ]; then
+              echo "Request: ${REQUEST_ID}"
+            fi
+            if [ -n "$COMPANY_SLUG" ]; then
+              echo "Company: ${COMPANY_NAME:-$COMPANY_SLUG}"
             fi
             if [ -n "$SKIP_REASON" ]; then
-              echo "Request creation skipped: ${SKIP_REASON}"
+              echo "Note: Request creation skipped — ${SKIP_REASON}"
+            fi
+            if [ -n "$REVIEW_URL" ]; then
+              upsert_pr_comment "pending" "$REVIEW_URL"
             fi
             set_commit_status "pending" "Waiting for approval" "$REVIEW_URL"
             if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
