@@ -1,0 +1,26 @@
+name: Deploy Gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  permission-check:
+    name: Permission Protocol
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: permission-protocol/deploy-gate@v1
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+          pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
+          environment: 'production'
+          capability: 'deploy:main'
+          fail-on-missing: 'true'
+          post-comment: 'true'
+          fail-open-timeout: '30'
