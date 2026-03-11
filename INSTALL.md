@@ -98,7 +98,7 @@ Open a PR to `main`. Deploy Gate always creates/verifies a PP request and posts 
 
 A human must approve before merge.
 
-👉 APPROVE HERE: https://permissionprotocol.com/review/dr_abc123
+👉 APPROVE HERE: https://app.permissionprotocol.com/review/dr_abc123
 
 After approval, re-run this workflow.
 ═══════════════════════════════════════════════════════════
@@ -107,13 +107,13 @@ After approval, re-run this workflow.
 PR comment (auto-approved / verified):
 ```markdown
 ✅ **Permission Protocol:** Approved
-[View receipt →](https://permissionprotocol.com/review/{requestId})
+[View receipt →](https://app.permissionprotocol.com/review/{requestId})
 ```
 
 PR comment (approval required):
 ```markdown
 ⏳ **Permission Protocol:** Approval required
-[Review & approve →](https://permissionprotocol.com/review/{requestId})
+[Review & approve →](https://app.permissionprotocol.com/review/{requestId})
 ```
 
 ---
@@ -143,7 +143,7 @@ Error: Request failed with status code 404
 ```
 **Fix:** Your repo isn't registered with Permission Protocol.
 - Go to [app.permissionprotocol.com](https://app.permissionprotocol.com)
-- Add your repo in **Settings → Repos**
+- Connect the repo to your Permission Protocol account
 
 ### PP unavailable (fail-open)
 ```

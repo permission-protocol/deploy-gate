@@ -9,6 +9,10 @@
 <h1 align="center">Deploy Gate</h1>
 
 <p align="center">
+  <strong>Permission Protocol is the approval layer for autonomous systems. Deploy Gate is its GitHub Action.</strong>
+</p>
+
+<p align="center">
   <strong>One workflow. Human approval required. No exceptions.</strong>
 </p>
 
@@ -19,18 +23,6 @@
   <a href="https://github.com/marketplace/actions/deploy-gate">
     <img src="https://img.shields.io/badge/GitHub_Marketplace-Deploy_Gate-blue?style=flat-square" alt="Marketplace">
   </a>
-  <img src="https://img.shields.io/badge/🛡️_Deploy_Gate-Enabled-success?style=flat-square" alt="Deploy Gate Enabled">
-</p>
-
-<p align="center">
-  <a href="https://github.com/permission-protocol/deploy-gate/stargazers">
-    <img src="https://img.shields.io/github/stars/permission-protocol/deploy-gate?style=flat-square&label=stars" alt="GitHub Stars">
-  </a>
-  <a href="https://github.com/permission-protocol/deploy-gate/network/members">
-    <img src="https://img.shields.io/github/forks/permission-protocol/deploy-gate?style=flat-square&label=forks" alt="Forks">
-  </a>
-  <img src="https://img.shields.io/badge/Repos_Protected-3-blueviolet?style=flat-square" alt="Repos Protected">
-  <img src="https://img.shields.io/badge/Approvals_Issued-12-blue?style=flat-square" alt="Approvals Issued">
 </p>
 
 ---
@@ -122,7 +114,7 @@ jobs:
 
 ### 1. Get API Key
 
-Sign up at [permissionprotocol.com](https://permissionprotocol.com) and create an API key.
+Sign up at [app.permissionprotocol.com](https://app.permissionprotocol.com) and create an API key.
 
 ### 2. Add Secret
 
@@ -226,13 +218,13 @@ Use this when you want custom scope values and auto-request creation in one work
 Auto-approved / verified:
 ```markdown
 ✅ **Permission Protocol:** Approved
-[View receipt →](https://permissionprotocol.com/review/{requestId})
+[View receipt →](https://app.permissionprotocol.com/review/{requestId})
 ```
 
 Approval required:
 ```markdown
 ⏳ **Permission Protocol:** Approval required
-[Review & approve →](https://permissionprotocol.com/review/{requestId})
+[Review & approve →](https://app.permissionprotocol.com/review/{requestId})
 ```
 
 ---
@@ -253,9 +245,13 @@ Deploy Gate closes that gap.
 
 ## Live Demo
 
-See it in action: [permission-protocol/pp-demo](https://github.com/permission-protocol/pp-demo)
+See it in action in the demo repo: [permission-protocol/pp-demo](https://github.com/permission-protocol/pp-demo)
 
-**🏆 [The Receipt Challenge](https://permissionprotocol.com/challenge)** — Try to merge without a receipt. If you succeed, you win.
+---
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
 
 ---
 
