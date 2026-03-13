@@ -218,13 +218,13 @@ Use this when you want custom scope values and auto-request creation in one work
 Auto-approved / verified:
 ```markdown
 ✅ **Permission Protocol:** Approved
-[View receipt →](https://app.permissionprotocol.com/review/{requestId})
+[View receipt →](https://app.permissionprotocol.com/pp/deploy-requests/{requestId})
 ```
 
 Approval required:
 ```markdown
 ⏳ **Permission Protocol:** Approval required
-[Review & approve →](https://app.permissionprotocol.com/review/{requestId})
+[Review & approve →](https://app.permissionprotocol.com/pp/deploy-requests/{requestId})
 ```
 
 ---

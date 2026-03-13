@@ -284,7 +284,7 @@ runs:
         DIAG_KEY_STATUS=$(echo "$HTTP_BODY" | jq -r '.diagnostics.keyStatus // .result.diagnostics.keyStatus // empty' 2>/dev/null || echo "")
 
         if [ -n "$REQUEST_ID" ]; then
-          REVIEW_URL="https://permissionprotocol.com/review/${REQUEST_ID}"
+          REVIEW_URL="${PP_BASE_URL}/pp/deploy-requests/${REQUEST_ID}"
         else
           REVIEW_URL="$APPROVAL_URL"
         fi
@@ -329,7 +329,7 @@ runs:
               echo "     ${REVIEW_URL}"
               echo ""
             else
-              echo "  👉 https://permissionprotocol.com/review"
+              echo "  👉 ${PP_BASE_URL}/pp/deploy-requests"
               echo ""
             fi
             echo "═══════════════════════════════════════════════════════════"
