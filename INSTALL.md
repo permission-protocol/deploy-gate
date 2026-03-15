@@ -98,7 +98,7 @@ Open a PR to `main`. Deploy Gate always creates/verifies a PP request and posts 
 
 A human must approve before merge.
 
-👉 APPROVE HERE: https://app.permissionprotocol.com/review/dr_abc123
+👉 APPROVE HERE: https://app.permissionprotocol.com/pp/deploy-requests/dr_abc123
 
 After approval, re-run this workflow.
 ═══════════════════════════════════════════════════════════
@@ -107,13 +107,13 @@ After approval, re-run this workflow.
 PR comment (auto-approved / verified):
 ```markdown
 ✅ **Permission Protocol:** Approved
-[View receipt →](https://app.permissionprotocol.com/review/{requestId})
+[View receipt →](https://app.permissionprotocol.com/pp/deploy-requests/{requestId})
 ```
 
 PR comment (approval required):
 ```markdown
 ⏳ **Permission Protocol:** Approval required
-[Review & approve →](https://app.permissionprotocol.com/review/{requestId})
+[Review & approve →](https://app.permissionprotocol.com/pp/deploy-requests/{requestId})
 ```
 
 ---
