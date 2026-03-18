@@ -118,6 +118,24 @@ PR comment (approval required):
 
 ---
 
+## ⚠️ CRITICAL: GitHub Rulesets & Strict Mode
+
+If you use **GitHub Repository Rulesets** (recommended) to enforce this check, follow these rules to avoid merge loops:
+
+1. **Create TWO rulesets** instead of one.
+2. **Ruleset 1: "Permission Protocol"**
+   - Required status check: `Permission Protocol`
+   - **Strict mode: OFF** (`strict_required_status_checks_policy: false`)
+   - *Why?* Authorization doesn't go stale when `main` advances. Strict mode creates phantom "Expected" errors that block merges unnecessarily.
+3. **Ruleset 2: "Build Protection"**
+   - Required status check: `Build and test` (or your CI check)
+   - **Strict mode: ON** (`strict_required_status_checks_policy: true`)
+   - *Why?* This ensures your code actually compiles with the latest `main` before merging.
+
+**Result:** Your code stays fresh, but your human approvals don't get wiped out every time someone else merges to `main`.
+
+---
+
 ## Common Errors
 
 ### 401 Unauthorized

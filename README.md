@@ -149,6 +149,17 @@ Open any PR to the protected branch. Deploy Gate always creates/verifies a reque
 
 ---
 
+## ⚠️ Recommended: GitHub Ruleset Pattern
+
+To avoid "merge loops" where approvals go stale when `main` advances, we recommend a **two-ruleset pattern** if you use GitHub Repository Rulesets:
+
+1. **Ruleset 1 (Permission Protocol):** Require `Permission Protocol` status check with **Strict mode: OFF**.
+2. **Ruleset 2 (Build Protection):** Require your build/test checks with **Strict mode: ON**.
+
+This ensures your code is up-to-date with `main`, but your human approvals stick once granted. [See full guide →](./INSTALL.md#%EF%B8%8F-critical-github-rulesets--strict-mode)
+
+---
+
 ## Configuration
 
 | Input | Description | Default |
