@@ -193,9 +193,17 @@ To avoid "merge loops" where approvals go stale when `main` advances, use a **tw
 
 ---
 
-## Live Demo
+## Try it live (30 seconds)
 
-See it in action: [permission-protocol/pp-demo](https://github.com/permission-protocol/pp-demo)
+No install needed. See the full flow on a real PR:
+
+1. **Open the demo PR** → [permission-protocol/pp-demo#23](https://github.com/permission-protocol/pp-demo/pull/23)
+2. **Click "Authorize Deploy"** in the bot comment
+3. **Sign in with GitHub** → approve → see the receipt
+
+That's the entire product. One blocked PR, one human signer, one receipt.
+
+Want to run it on your own repo? [Install guide →](./INSTALL.md)
 
 ---
 
