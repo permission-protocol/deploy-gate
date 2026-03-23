@@ -24,6 +24,20 @@
 ## See it in action
 
 <p align="center">
+  <img src="./assets/demo.gif" alt="Deploy Gate blocking a PR and requiring human approval" width="700">
+</p>
+
+
+PR opened → ❌ Blocked → Click approval → Human signs → ✅ Merge allowed
+
+
+Open a PR → Deploy Gate blocks it → click the approval link → approve & sign → return to GitHub → merge unlocked.
+
+---
+
+## See it in action
+
+<p align="center">
   <img src="./assets/demo-blocked-pr.png" alt="Deploy Gate blocking a PR — approval required" width="700">
 </p>
 
