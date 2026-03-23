@@ -66,13 +66,9 @@ jobs:
 
 AI agents can deploy code, delete data, and modify infrastructure.
 
-Today, they do this with:
+Today, they often do this with no approval, no accountability, and no audit trail. That's a production risk.
 
-- ❌ No explicit approval
-- ❌ No accountability
-- ❌ No audit trail
-
-"Approved" is a mutable DB flag. An agent, a backend, or a bug can flip it.
+"Approved" is a mutable DB flag. An agent, a backend, or a bug can flip it. There's no proof a human authorized *this specific action* with *these exact arguments*.
 
 Deploy Gate enforces:
 
@@ -80,7 +76,6 @@ Deploy Gate enforces:
 - ✅ Signature bound to exact args (commit, repo, environment)
 - ✅ Single-use receipt (replay fails)
 - ✅ Tamper-evident — any post-signing mutation fails verification
-- ✅ Verifiable audit trail
 
 It does not trust database state. Only the signed receipt.
 
