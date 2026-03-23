@@ -27,6 +27,10 @@
 PR opened → ❌ Deploy blocked → Human signs → ✅ Deploy proceeds
 ```
 
+<p align="center">
+  <img src="./assets/demo-blocked-pr.png" alt="Deploy Gate blocking a PR — approval required" width="700">
+</p>
+
 Open a PR. Deploy Gate blocks the merge. Click the approval link. Sign. Merge proceeds. Receipt recorded.
 
 **Takes ~3 minutes to install. One secret.**
