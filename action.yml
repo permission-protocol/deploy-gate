@@ -1,5 +1,5 @@
 name: 'Deploy Gate'
-description: 'Block AI deploys until a human explicitly approves and signs'
+description: 'Block AI deploys until a human signs off — no receipt, no merge'
 author: 'Permission Protocol'
 
 branding:
