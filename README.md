@@ -15,7 +15,7 @@
 
 <p align="center">
   <a href="https://github.com/permission-protocol/deploy-gate/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/permission-protocol/deploy-gate/test.yml?style=flat-square&label=tests" alt="Tests">
+    <img src="https://img.shields.io/github/actions/workflow/status/permission-protocol/deploy-gate/deploy-gate.yml?style=flat-square&label=tests" alt="Tests">
   </a>
 </p>
 
