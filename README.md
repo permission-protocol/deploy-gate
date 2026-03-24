@@ -131,7 +131,7 @@ No install required:
 1. Open demo PR  
    https://github.com/permission-protocol/pp-demo/pull/32  
 2. Click Authorize Deploy  
-3. Sign → return → merge
+3. Approve → see your signed receipt
 
 ---
 
