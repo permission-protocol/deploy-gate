@@ -57,11 +57,8 @@ jobs:
           pp-api-key: ${{ secrets.PP_API_KEY }}
 ```
 
-1. Get API key → https://app.permissionprotocol.com  
-2. Add secret:
-```bash
-gh secret set PP_API_KEY -b "pp_live_..."
-```
+1. Get API key
+2. Add secret
 3. Open a PR → watch it get blocked → approve → merge
 
 **Takes ~3 minutes. One secret.**
@@ -129,7 +126,7 @@ Deploy Gate checks for valid receipt
 No install required:
 
 1. Open demo PR  
-   https://github.com/permission-protocol/pp-demo/pull/23  
+   https://github.com/permission-protocol/pp-demo/pull/32  
 2. Click Authorize Deploy  
 3. Sign → return → merge
 
