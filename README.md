@@ -129,7 +129,7 @@ Deploy Gate checks for valid receipt
 No install required:
 
 1. Open demo PR  
-   https://github.com/permission-protocol/pp-demo/pull/32  
+   https://github.com/permission-protocol/pp-demo/pull/35  
 2. Click Authorize Deploy  
 3. Approve → see your signed receipt
 
