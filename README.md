@@ -24,7 +24,7 @@
 ## See it in action
 
 <p align="center">
-  <a href="https://app.permissionprotocol.com/demo"><strong>▶ Try the interactive demo</strong></a> — no login, no setup, 15 seconds.
+  <a href="https://app.permissionprotocol.com/demo/start?src=readme"><strong>▶ Try the interactive demo</strong></a> — no login, no setup, 15 seconds.
 </p>
 
 <p align="center">
