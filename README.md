@@ -24,6 +24,10 @@
 ## See it in action
 
 <p align="center">
+  <a href="https://app.permissionprotocol.com/demo"><strong>▶ Try the interactive demo</strong></a> — no login, no setup, 15 seconds.
+</p>
+
+<p align="center">
   <a href="./assets/demo.mp4">
     <img src="./assets/demo.gif" alt="Deploy Gate: PR blocked → human signs → merge unlocked" width="540">
   </a>
