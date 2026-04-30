@@ -72,6 +72,25 @@ gh secret set PP_API_KEY -b "pp_live_..."
 
 👉 [Full install guide →](./INSTALL.md)
 
+## Failure modes
+
+`v2` defaults to fail-closed when the Permission Protocol API is unavailable.
+
+| Environment | `fail-mode` | Result on API unavailable | Log line |
+|---|---|---|---|
+| Production match (`production,prod,live` by default) | `closed` or `open` | Fail (exit non-zero) | `::error ... Failing CLOSED for production ...` |
+| Non-production | `closed` (default) | Fail (exit non-zero) | `::error ... Failing CLOSED for non-production ...` |
+| Non-production | `open` (opt-in) | Pass (exit 0) | `::warning ... Fail-mode=open (opt-in) ...` |
+
+Inputs:
+- `fail-mode`: `closed` (default) or `open` (only honored in non-production)
+- `production-environments`: comma-separated production names, default `production,prod,live`
+- `fail-open-timeout`: timeout only (deprecated as policy control). It controls API timeout duration, not fail-open/fail-closed policy.
+
+## Release notes
+
+- **BREAKING**: defaults to fail-closed. To restore v1 behavior, set fail-mode: open and remove production-environments.
+
 ---
 
 ## What it does

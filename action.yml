@@ -1,5 +1,6 @@
+# Version: v2
 name: 'Deploy Gate'
-description: 'Block AI deploys until a human signs off — no receipt, no merge'
+description: 'Block AI deploys until a human signs off — no receipt, no merge (v2 fail-closed defaults)'
 author: 'Permission Protocol'
 
 branding:
@@ -39,9 +40,17 @@ inputs:
     required: false
     default: 'true'
   fail-open-timeout:
-    description: 'Seconds to wait for PP API before fail-open'
+    description: 'Seconds to wait for PP API before treating it as unavailable'
     required: false
     default: '30'
+  fail-mode:
+    description: 'Failure policy when PP API is unavailable in non-production environments: closed (default) or open'
+    required: false
+    default: 'closed'
+  production-environments:
+    description: 'Comma-separated environment names treated as production and always forced fail-closed'
+    required: false
+    default: 'production,prod,live'
   post-comment:
     description: 'Post or update a Permission Protocol comment on PRs'
     required: false
@@ -86,6 +95,8 @@ runs:
         PP_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
         PP_PROTECTED_PATHS: ${{ inputs.protected-paths }}
         PP_FAIL_OPEN_TIMEOUT: ${{ inputs.fail-open-timeout }}
+        PP_FAIL_MODE: ${{ inputs.fail-mode }}
+        PP_PRODUCTION_ENVIRONMENTS: ${{ inputs.production-environments }}
         PP_POST_COMMENT: ${{ inputs.post-comment }}
         PP_REPOSITORY: ${{ github.repository }}
         PP_PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -149,17 +160,47 @@ runs:
           fi
         }
 
-        fail_open() {
+        handle_unavailable() {
           local reason="$1"
-          echo "⚠️ PP unavailable - fail-open: ${reason}"
-          set_output "approved" "true"
+          local fail_mode_effective="$PP_FAIL_MODE_NORMALIZED"
+          if [ "$IS_PRODUCTION_ENVIRONMENT" = "true" ] && [ "$PP_FAIL_MODE_NORMALIZED" = "open" ]; then
+            echo "::warning title=Permission Protocol::fail-mode=open requested but environment '${PP_ENVIRONMENT}' is production; forcing fail-mode=closed."
+            fail_mode_effective="closed"
+          fi
+
+          if [ "$IS_PRODUCTION_ENVIRONMENT" = "true" ]; then
+            echo "::error title=Permission Protocol::Verification API unavailable. Failing CLOSED for production environment '${PP_ENVIRONMENT}'. Reason: ${reason}"
+            set_output "approved" "false"
+            set_output "receipt-id" ""
+            set_output "decision" ""
+            set_output "error-code" "PP_UNAVAILABLE"
+            set_output "error-message" "$reason"
+            set_output "request-id" ""
+            set_output "approval-url" ""
+            exit 1
+          fi
+
+          if [ "$fail_mode_effective" = "open" ]; then
+            echo "::warning title=Permission Protocol::Verification API unavailable in non-production env '${PP_ENVIRONMENT}'. Fail-mode=open (opt-in). Reason: ${reason}"
+            set_output "approved" "true"
+            set_output "receipt-id" ""
+            set_output "decision" ""
+            set_output "error-code" "PP_UNAVAILABLE"
+            set_output "error-message" "$reason"
+            set_output "request-id" ""
+            set_output "approval-url" ""
+            exit 0
+          fi
+
+          echo "::error title=Permission Protocol::Verification API unavailable. Failing CLOSED for non-production environment '${PP_ENVIRONMENT}'. Reason: ${reason}"
+          set_output "approved" "false"
           set_output "receipt-id" ""
           set_output "decision" ""
           set_output "error-code" "PP_UNAVAILABLE"
           set_output "error-message" "$reason"
           set_output "request-id" ""
           set_output "approval-url" ""
-          exit 0
+          exit 1
         }
 
         REPO="${PP_REPOSITORY,,}"
@@ -178,6 +219,24 @@ runs:
         if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
           FAIL_ON_MISSING_JSON=false
         fi
+
+        PP_FAIL_MODE_NORMALIZED=$(echo "${PP_FAIL_MODE:-closed}" | tr '[:upper:]' '[:lower:]')
+        if [ "$PP_FAIL_MODE_NORMALIZED" != "open" ] && [ "$PP_FAIL_MODE_NORMALIZED" != "closed" ]; then
+          PP_FAIL_MODE_NORMALIZED="closed"
+        fi
+
+        normalize_csv_items() {
+          echo "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]'
+        }
+
+        IS_PRODUCTION_ENVIRONMENT=false
+        PP_ENVIRONMENT_NORMALIZED=$(echo "${PP_ENVIRONMENT}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+        while IFS= read -r env_name; do
+          if [ -n "$env_name" ] && [ "$PP_ENVIRONMENT_NORMALIZED" = "$env_name" ]; then
+            IS_PRODUCTION_ENVIRONMENT=true
+            break
+          fi
+        done < <(normalize_csv_items "${PP_PRODUCTION_ENVIRONMENTS}")
 
         echo "🔍 Collecting changed files for risk metadata..."
         CHANGED_FILES=$(gh pr view "${PP_PR_NUMBER}" --json files --jq '.files[].path' 2>/dev/null || echo "")
@@ -252,14 +311,14 @@ runs:
         set -e
 
         if [ "$CURL_EXIT" -ne 0 ]; then
-          fail_open "API request failed (curl exit ${CURL_EXIT})"
+          handle_unavailable "API request failed (curl exit ${CURL_EXIT})"
         fi
 
         HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
         HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
 
         if [ -z "$HTTP_BODY" ] || [ "$HTTP_STATUS" = "000" ]; then
-          fail_open "Empty response from Permission Protocol"
+          handle_unavailable "Empty response from Permission Protocol"
         fi
 
         VALID=$(echo "$HTTP_BODY" | jq -r '.valid // .result.valid // false' 2>/dev/null || echo "false")
