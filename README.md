@@ -1,43 +1,23 @@
-<p align="center">
-  <img src="./assets/gate-blocked.svg" alt="Deploy Gate blocked symbol" width="64">
-</p>
+# Deploy Gate
 
-<h1 align="center">Deploy Gate</h1>
+**Stop AI coding agents from shipping production changes you didn't authorize.**
 
-<p align="center">
-  <strong>Block AI deploys until a human signs.</strong>
-</p>
+When Cursor / Codex / Copilot / Claude Code opens a PR that touches `deploy/`, `.github/workflows/`, or any path you mark sensitive, Deploy Gate blocks the merge until a named human signs an approval and produces a signed receipt that proves who authorized what against which policy.
 
-<p align="center">
-  AI agents can open PRs. They should not deploy to production.<br>
-  This GitHub Action enforces that boundary.
-</p>
+- ⛔ **Fails closed by default** for production environments
+- ✍️ **Ed25519-signed receipts** bound to the exact action
+- ⚡ **<200ms enforcement** in the GitHub status check
+- 🆓 **MIT-licensed action**
 
-<p align="center">
-  <a href="https://github.com/permission-protocol/deploy-gate/actions">
-    <img src="https://img.shields.io/github/actions/workflow/status/permission-protocol/deploy-gate/deploy-gate.yml?style=flat-square&label=tests" alt="Tests">
-  </a>
-</p>
+> "GitHub asks 'did a reviewer approve?' Deploy Gate asks 'did a named human authorize this exact AI action?' and gives you signed proof."
 
----
+## Why this exists
 
-## See it in action
+AI agents are moving from "suggest text" to "take actions": committing code, modifying workflows, and deploying to production. GitHub controls like branch protection, environments, and required reviewers gate humans, not agents.
 
-<p align="center">
-  <a href="https://app.permissionprotocol.com/demo/start?src=readme"><strong>▶ Try the interactive demo</strong></a> — no login, no setup, 15 seconds.
-</p>
+Deploy Gate is the missing primitive: a deterministic gate keyed to the exact action the agent is taking, with a signed authority receipt as the audit artifact.
 
-<p align="center">
-  <a href="./assets/demo.mp4">
-    <img src="./assets/demo.gif" alt="Deploy Gate: PR blocked → human signs → merge unlocked" width="540">
-  </a>
-</p>
-
-```
-PR opened → ❌ Deploy blocked → Human authorizes → ✅ Signed → Merge unlocked
-```
-
----
+When audit time comes, you do not want to hand over a mutable PR comment thread. You want a chain of signed receipts that can be independently verified.
 
 ## Quickstart
 
@@ -61,103 +41,76 @@ jobs:
           pp-api-key: ${{ secrets.PP_API_KEY }}
 ```
 
-1. Get API key → https://app.permissionprotocol.com  
+1. Get API key at https://app.permissionprotocol.com
 2. Add secret:
+
 ```bash
 gh secret set PP_API_KEY -b "pp_live_..."
 ```
-3. Open a PR → watch it get blocked → approve → merge
 
-**Takes ~3 minutes. One secret.**
+3. Open a PR and watch deploy-sensitive changes block until approval
 
-👉 [Full install guide →](./INSTALL.md)
+Full install guide: [INSTALL.md](./INSTALL.md)
 
 ## Failure modes
 
-`v2` defaults to fail-closed when the Permission Protocol API is unavailable.
+`v2` defaults to fail-closed when the Permission Protocol API is unavailable. **A security tool that fails open in a network blip is not a security tool.**
 
-| Environment | `fail-mode` | Result on API unavailable | Log line |
-|---|---|---|---|
-| Production match (`production,prod,live` by default) | `closed` or `open` | Fail (exit non-zero) | `::error ... Failing CLOSED for production ...` |
-| Non-production | `closed` (default) | Fail (exit non-zero) | `::error ... Failing CLOSED for non-production ...` |
-| Non-production | `open` (opt-in) | Pass (exit 0) | `::warning ... Fail-mode=open (opt-in) ...` |
+| Environment | `fail-mode` | Result on API unavailable |
+| --- | --- | --- |
+| Production (`production`, `prod`, `live` by default) | `closed` or `open` (forced to closed) | ❌ Fails closed. No deploy. |
+| Non-production (`staging`, `preview`, etc.) | `closed` (default) | ❌ Fails closed. No deploy. |
+| Non-production | `open` (opt-in) | ✅ Pass with `::warning::` log |
 
 Inputs:
-- `fail-mode`: `closed` (default) or `open` (only honored in non-production)
-- `production-environments`: comma-separated production names, default `production,prod,live`
-- `fail-open-timeout`: timeout only (deprecated as policy control). It controls API timeout duration, not fail-open/fail-closed policy.
 
-## Release notes
+- `fail-mode`: `closed` (default) or `open` — only honored in non-production environments.
+- `production-environments`: comma-separated environment names treated as production, default `production,prod,live`.
+- `fail-open-timeout`: API timeout in seconds. It controls timeout duration only, not failure policy.
 
-- **BREAKING**: defaults to fail-closed. To restore v1 behavior, set fail-mode: open and remove production-environments.
+### Release notes (v2)
 
----
-
-## What it does
-
-- Blocks risky PRs with a required status check  
-- Posts a PR comment with a direct approval link  
-- Sends the reviewer to Permission Protocol to approve and sign  
-- Unblocks the PR instantly after approval  
-- Produces a tamper-evident approval record  
-
----
-
-## Why this exists
-
-AI agents can write code, open PRs, and trigger workflows — but they should not have authority to deploy on their own.
-
-Today:
-- approvals are mutable
-- logs are not proof
-- systems trust state, not intent
-
-Deploy Gate enforces:
-
-- Explicit human signer (Ed25519)
-- Signature bound to exact action (commit, repo, environment)
-- Single-use receipt (replay fails)
-- Tamper-evident — mutation invalidates approval
-
-It does not trust database state. Only signed receipts.
-
----
+- **BREAKING**: defaults to fail-closed. To restore v1 behavior, set `fail-mode: open` and remove `production-environments`.
 
 ## How it works
 
-```
+*Block -> Approve -> Verify -> Merge.*
+
+```text
 PR opened
    │
    ▼
 Deploy Gate checks for valid receipt
    │
-   ├── Receipt exists ───────────────► Merge allowed
+   ├── Receipt exists ----------> Merge allowed
    │
-   └── No receipt ───────────────────► Blocked
-                                          │
-                                          ▼
-                                   PR comment with approval link
-                                          │
-                                          ▼
-                                   Human approves + signs
-                                          │
-                                          ▼
-                                   Re-run CI → Merge allowed
+   └── No receipt --------------> Blocked
+                                     │
+                                     ▼
+                              PR comment with approval link
+                                     │
+                                     ▼
+                              Human approves + signs
+                                     │
+                                     ▼
+                              Re-run CI -> Merge allowed
 ```
 
----
+## What it does
 
-## Try it live (30 seconds)
+- Blocks risky PRs with a required status check
+- Posts a PR comment with a direct approval link
+- Unblocks the PR instantly after approval
+- Produces a tamper-evident approval receipt
 
-No install required:
+## Comparison
 
-1. Open demo PR  
-   https://github.com/permission-protocol/pp-demo/pull/35  
-2. Click Authorize Deploy  
-3. Approve → see your signed receipt
-
----
+| Option | Human authorization on AI action | Cryptographic proof | Default under outage |
+| --- | --- | --- | --- |
+| GitHub required reviewer only | Partial | No | Often workflow-dependent |
+| PR comments + screenshots | No | No | Open to mutation |
+| Deploy Gate | Yes | Yes (Ed25519 receipt) | Fails closed for production |
 
 ## License
 
-MIT — see LICENSE
+MIT - see [LICENSE](./LICENSE)
