@@ -1,6 +1,6 @@
-# Version: v2
+# Version: v2.1.0
 name: 'Deploy Gate'
-description: 'Block AI deploys until a human signs off — no receipt, no merge (v2 fail-closed defaults)'
+description: 'Block AI agents from production deploys without a human-signed Ed25519 receipt. Fails closed by default.'
 author: 'Permission Protocol'
 
 branding:
