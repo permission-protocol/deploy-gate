@@ -11,14 +11,6 @@ When Cursor / Codex / Copilot / Claude Code opens a PR that touches `deploy/`, `
 
 > "GitHub asks 'did a reviewer approve?' Deploy Gate asks 'did a named human authorize this exact AI action?' and gives you signed proof."
 
-## Why this exists
-
-AI agents are moving from "suggest text" to "take actions": committing code, modifying workflows, and deploying to production. GitHub controls like branch protection, environments, and required reviewers gate humans, not agents.
-
-Deploy Gate is the missing primitive: a deterministic gate keyed to the exact action the agent is taking, with a signed authority receipt as the audit artifact.
-
-When audit time comes, you do not want to hand over a mutable PR comment thread. You want a chain of signed receipts that can be independently verified.
-
 ## Quickstart
 
 Add to your workflow:
@@ -41,6 +33,10 @@ jobs:
           pp-api-key: ${{ secrets.PP_API_KEY }}
 ```
 
+Free for unlimited signers and unlimited public repos. Paid tiers add policy controls and audit retention. See [pricing](https://permissionprotocol.com/pricing).
+
+![Blocked PR](./assets/marketplace-blocked-pr.png)
+
 1. Get API key at https://app.permissionprotocol.com
 2. Add secret:
 
@@ -51,6 +47,14 @@ gh secret set PP_API_KEY -b "pp_live_..."
 3. Open a PR and watch deploy-sensitive changes block until approval
 
 Full install guide: [INSTALL.md](./INSTALL.md)
+
+## Why this exists
+
+AI agents are moving from "suggest text" to "take actions": committing code, modifying workflows, and deploying to production. GitHub controls like branch protection, environments, and required reviewers gate humans, not agents.
+
+Deploy Gate is the missing primitive: a deterministic gate keyed to the exact action the agent is taking, with a signed authority receipt as the audit artifact.
+
+When audit time comes, you do not want to hand over a mutable PR comment thread. You want a chain of signed receipts that can be independently verified.
 
 ## Failure modes
 
@@ -110,6 +114,13 @@ Deploy Gate checks for valid receipt
 | GitHub required reviewer only | Partial | No | Often workflow-dependent |
 | PR comments + screenshots | No | No | Open to mutation |
 | Deploy Gate | Yes | Yes (Ed25519 receipt) | Fails closed for production |
+
+## Resources
+
+- Trust + compliance: https://permissionprotocol.com/trust
+- Support: https://permissionprotocol.com/contact
+- Live demo: https://permissionprotocol.com/r/demo
+- Reference verifier (CLI): https://github.com/permission-protocol/pp-cli
 
 ## License
 
