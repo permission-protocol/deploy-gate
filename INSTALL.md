@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: permission-protocol/deploy-gate@v1
+      - uses: permission-protocol/deploy-gate@v2
         with:
           pp-api-key: ${{ secrets.PP_API_KEY }}
 ```
@@ -62,7 +62,7 @@ jobs:
 Optional (auto-create request on missing receipt):
 
 ```yaml
-      - uses: permission-protocol/deploy-gate@v1
+      - uses: permission-protocol/deploy-gate@v2
         with:
           pp-api-key: ${{ secrets.PP_API_KEY }}
           pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
@@ -189,7 +189,7 @@ Default protected paths: `deploy/` and `.github/workflows/`
 To send different risk metadata signals:
 
 ```yaml
-- uses: permission-protocol/deploy-gate@v1
+- uses: permission-protocol/deploy-gate@v2
   with:
     pp-api-key: ${{ secrets.PP_API_KEY }}
     protected-paths: '^(src/critical/|infra/|k8s/|terraform/)'
