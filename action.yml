@@ -1,4 +1,4 @@
-# Version: v2.1.0
+# Version: v2.2.0
 name: 'Deploy Gate'
 description: 'Block AI agents from production deploys without a human-signed Ed25519 receipt. Fails closed by default.'
 author: 'Permission Protocol'
@@ -237,6 +237,23 @@ runs:
             break
           fi
         done < <(normalize_csv_items "${PP_PRODUCTION_ENVIRONMENTS}")
+
+        # Skip the gate entirely for draft PRs — not ready for review/approval.
+        # When the PR is marked ready for review, the gate will run again.
+        if [ -n "${PP_PR_NUMBER}" ]; then
+          IS_DRAFT=$(gh pr view "${PP_PR_NUMBER}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "⏭️  Skipping Permission Protocol gate — PR #${PP_PR_NUMBER} is a draft"
+            set_output "approved" "true"
+            set_output "receipt-id" ""
+            set_output "decision" "DRAFT_SKIPPED"
+            set_output "error-code" ""
+            set_output "error-message" ""
+            set_output "request-id" ""
+            set_output "approval-url" ""
+            exit 0
+          fi
+        fi
 
         echo "🔍 Collecting changed files for risk metadata..."
         CHANGED_FILES=$(gh pr view "${PP_PR_NUMBER}" --json files --jq '.files[].path' 2>/dev/null || echo "")
