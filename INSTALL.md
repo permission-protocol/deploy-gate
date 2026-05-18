@@ -68,6 +68,17 @@ Optional (auto-create request on missing receipt):
           pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
 ```
 
+Optional (explicitly allow PR-level approval carry-forward):
+
+```yaml
+      - uses: permission-protocol/deploy-gate@v2
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+          allow-carry-forward: true
+```
+
+By default, carried-forward approvals fail closed so each pushed PR head needs its own valid receipt.
+
 Commit and push.
 
 ---
