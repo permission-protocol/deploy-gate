@@ -106,6 +106,7 @@ Deploy Gate checks for valid receipt
 - Posts a PR comment with a direct approval link
 - Unblocks the PR instantly after approval
 - Produces a tamper-evident approval receipt
+- Fails closed on carried-forward receipts by default, so a pushed PR update needs a fresh approval for the current head SHA
 
 ## Comparison
 
@@ -114,6 +115,19 @@ Deploy Gate checks for valid receipt
 | GitHub required reviewer only | Partial | No | Often workflow-dependent |
 | PR comments + screenshots | No | No | Open to mutation |
 | Deploy Gate | Yes | Yes (Ed25519 receipt) | Fails closed for production |
+
+## Carry-forward approvals
+
+`v2.2.0` fails closed when the API reports that an approval was carried forward from an earlier PR-level receipt. That keeps the status check bound to the current PR head instead of accepting a receipt from a prior revision after new commits are pushed.
+
+If a repository intentionally wants PR-level carry-forward behavior, opt in explicitly:
+
+```yaml
+- uses: permission-protocol/deploy-gate@v2
+  with:
+    pp-api-key: ${{ secrets.PP_API_KEY }}
+    allow-carry-forward: true
+```
 
 ## Resources
 
