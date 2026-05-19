@@ -47,6 +47,7 @@ name: Deploy Gate
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 jobs:
@@ -69,6 +70,19 @@ Optional (auto-create request on missing receipt):
 ```
 
 Commit and push.
+
+---
+
+Optional (explicitly keep the old draft-PR skip behavior):
+
+```yaml
+      - uses: permission-protocol/deploy-gate@v2
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+          allow-draft-skip: true
+```
+
+By default, draft PRs fail closed because no receipt has been verified yet. If you opt into skipping drafts, keep `ready_for_review` in the workflow trigger so GitHub reruns the gate before the PR can merge.
 
 ---
 
@@ -177,6 +191,7 @@ Error: Request failed with status code 404
 ```yaml
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 ```
 
