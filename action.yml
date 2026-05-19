@@ -55,6 +55,10 @@ inputs:
     description: 'Post or update a Permission Protocol comment on PRs'
     required: false
     default: 'true'
+  allow-draft-skip:
+    description: 'Allow draft PRs to pass without receipt verification. Defaults to false so required checks cannot stay green after ready_for_review without a rerun.'
+    required: false
+    default: 'false'
 
 outputs:
   approved:
@@ -98,6 +102,7 @@ runs:
         PP_FAIL_MODE: ${{ inputs.fail-mode }}
         PP_PRODUCTION_ENVIRONMENTS: ${{ inputs.production-environments }}
         PP_POST_COMMENT: ${{ inputs.post-comment }}
+        PP_ALLOW_DRAFT_SKIP: ${{ inputs.allow-draft-skip }}
         PP_REPOSITORY: ${{ github.repository }}
         PP_PR_NUMBER: ${{ github.event.pull_request.number }}
         PP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -225,6 +230,11 @@ runs:
           PP_FAIL_MODE_NORMALIZED="closed"
         fi
 
+        PP_ALLOW_DRAFT_SKIP_NORMALIZED=$(echo "${PP_ALLOW_DRAFT_SKIP:-false}" | tr '[:upper:]' '[:lower:]')
+        if [ "$PP_ALLOW_DRAFT_SKIP_NORMALIZED" != "true" ]; then
+          PP_ALLOW_DRAFT_SKIP_NORMALIZED="false"
+        fi
+
         normalize_csv_items() {
           echo "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]'
         }
@@ -238,20 +248,35 @@ runs:
           fi
         done < <(normalize_csv_items "${PP_PRODUCTION_ENVIRONMENTS}")
 
-        # Skip the gate entirely for draft PRs — not ready for review/approval.
-        # When the PR is marked ready for review, the gate will run again.
+        # Draft PRs are not ready for review/approval, but a successful required
+        # check can remain attached to the head SHA after ready_for_review unless
+        # the workflow explicitly triggers on that event. Fail closed by default.
         if [ -n "${PP_PR_NUMBER}" ]; then
           IS_DRAFT=$(gh pr view "${PP_PR_NUMBER}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
           if [ "$IS_DRAFT" = "true" ]; then
-            echo "⏭️  Skipping Permission Protocol gate — PR #${PP_PR_NUMBER} is a draft"
-            set_output "approved" "true"
+            if [ "$PP_ALLOW_DRAFT_SKIP_NORMALIZED" = "true" ]; then
+              echo "::warning title=Permission Protocol::Draft PR skip is explicitly enabled. Ensure the workflow triggers on ready_for_review so this check reruns before merge."
+              echo "⏭️  Skipping Permission Protocol gate — PR #${PP_PR_NUMBER} is a draft"
+              set_output "approved" "true"
+              set_output "receipt-id" ""
+              set_output "decision" "DRAFT_SKIPPED"
+              set_output "error-code" ""
+              set_output "error-message" ""
+              set_output "request-id" ""
+              set_output "approval-url" ""
+              exit 0
+            fi
+
+            echo "::error title=Permission Protocol::Draft PRs fail closed by default because no receipt has been verified for this head SHA."
+            echo "Mark the PR ready for review and rerun this workflow, or add ready_for_review to the workflow trigger."
+            set_output "approved" "false"
             set_output "receipt-id" ""
-            set_output "decision" "DRAFT_SKIPPED"
-            set_output "error-code" ""
-            set_output "error-message" ""
+            set_output "decision" "DRAFT_BLOCKED"
+            set_output "error-code" "PP_DRAFT_PR_BLOCKED"
+            set_output "error-message" "Draft PR skipped receipt verification. Required checks must not pass until the verify endpoint runs for the current head SHA."
             set_output "request-id" ""
             set_output "approval-url" ""
-            exit 0
+            exit 1
           fi
         fi
 
