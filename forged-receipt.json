@@ -1,0 +1,30 @@
+{
+  "id": "rcpt_forged_pr32_001",
+  "companyId": "co_permission_protocol",
+  "idemKey": "idem_abc123",
+  "agentId": "agent_prod_1",
+  "runId": "run_12345",
+  "requestJson": {
+    "signer": "alice@corp.com",
+    "action": "deploy:production",
+    "repo": "permission-protocol/pp-demo",
+    "commitSha": "9f2c1a7",
+    "prNumber": 32
+  },
+  "inputHash": "ae1608896372720b6ebb58261e0c0092c608324b0804bc99267c1753990faaa8",
+  "status": "valid",
+  "riskTier": "high",
+  "policyVersion": "prod-deploy-v2",
+  "reasonCodes": [
+    "POLICY_MATCH"
+  ],
+  "summary": "Approved deploy to production",
+  "receiptVersion": "v1",
+  "canonicalization": "jcs_v1",
+  "signatureAlg": "ed25519",
+  "signatureKeyId": "pp-test-2026-q2",
+  "expiresAt": "2026-12-31T00:00:00.000Z",
+  "createdAt": "2026-04-30T16:23:11.000Z",
+  "signatureValue": "7MmZH9s9ggsHJtWRRv9MXoaO8EDBphCi7IrmE3vezeyZWM0j9JTw3gn2uwwgz9wG63sq/qryynjyLwLharkTCA==",
+  "redeemedAt": "2026-04-30T17:00:00.000Z"
+}
