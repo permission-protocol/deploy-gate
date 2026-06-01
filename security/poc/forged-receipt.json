@@ -1,5 +1,5 @@
 {
-  "id": "rcpt_forged_pr32_001",
+  "id": "rcpt_forged_pr32_ephemeral_001",
   "companyId": "co_permission_protocol",
   "idemKey": "idem_abc123",
   "agentId": "agent_prod_1",
@@ -25,6 +25,6 @@
   "signatureKeyId": "pp-test-2026-q2",
   "expiresAt": "2026-12-31T00:00:00.000Z",
   "createdAt": "2026-04-30T16:23:11.000Z",
-  "signatureValue": "7MmZH9s9ggsHJtWRRv9MXoaO8EDBphCi7IrmE3vezeyZWM0j9JTw3gn2uwwgz9wG63sq/qryynjyLwLharkTCA==",
+  "signatureValue": "ahe6nGTTzBJCAEmMh37TcSo+/Mthnp79rhYmM3LntvRqDLzk48htgoZFt5l/djy+mIDtzjYREJGRslG+RARbAQ==",
   "redeemedAt": "2026-04-30T17:00:00.000Z"
 }
