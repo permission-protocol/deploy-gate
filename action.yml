@@ -100,6 +100,8 @@ runs:
         PP_POST_COMMENT: ${{ inputs.post-comment }}
         PP_REPOSITORY: ${{ github.repository }}
         PP_PR_NUMBER: ${{ github.event.pull_request.number }}
+        # Through env, never interpolated into the script: a PR title is attacker-controlled text.
+        PP_PR_TITLE: ${{ github.event.pull_request.title }}
         PP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PP_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         PP_RUN_ID: ${{ github.run_id }}
@@ -288,6 +290,7 @@ runs:
           --argjson failOnMissing "$FAIL_ON_MISSING_JSON" \
           --argjson protectedPathsChanged "$PROTECTED_PATHS_CHANGED" \
           --argjson changedFiles "$CHANGED_FILES_JSON" \
+          --arg prTitle "${PP_PR_TITLE:-}" \
           '{
             scope: {
               repo: $repo,
@@ -300,7 +303,11 @@ runs:
             failOnMissing: $failOnMissing,
             protectedPathsChanged: $protectedPathsChanged,
             changedFiles: $changedFiles
-          }')
+          }
+          # The PR title, so the approval page has one even when PP cannot
+          # read the pull request itself. PP accepts at most 300 characters
+          # and rejects null, so the key is trimmed or left out.
+          + (if ($prTitle | length) > 0 then { prTitle: $prTitle[0:300] } else {} end)')
 
         echo ""
         echo "═══════════════════════════════════════════════════════════"
