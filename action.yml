@@ -1,4 +1,4 @@
-# Version: v2.2.0
+# Version: v2.3.0
 name: 'Deploy Gate'
 description: 'Block AI agents from production deploys without a human-signed Ed25519 receipt. Fails closed by default.'
 author: 'Permission Protocol'
@@ -27,10 +27,14 @@ inputs:
     description: 'Capability required for this gate'
     required: false
     default: 'deploy:production'
-  redeem:
-    description: 'Redeem receipt on verify (use false for PR gates, true for deploy workflows)'
+  mode:
+    description: 'pr (gate a pull request), deploy (gate a deploy of a merged PR on push or workflow_dispatch), or auto (pr on pull_request events, deploy otherwise)'
     required: false
-    default: 'false'
+    default: 'auto'
+  redeem:
+    description: 'Redeem receipt on verify. Defaults to false in pr mode. Deploy mode always redeems; setting false there is an error.'
+    required: false
+    default: ''
   protected-paths:
     description: 'Regex pattern for protected paths used for risk assessment metadata (not gating)'
     required: false
@@ -78,6 +82,15 @@ outputs:
   approval-url:
     description: 'URL to approve the deploy'
     value: ${{ steps.verify.outputs.approval-url }}
+  mode:
+    description: 'The mode that ran: pr or deploy'
+    value: ${{ steps.verify.outputs.mode }}
+  pr-number:
+    description: 'The pull request whose approval was checked (in deploy mode, the merged PR)'
+    value: ${{ steps.verify.outputs.pr-number }}
+  pr-head-sha:
+    description: 'The approved head SHA that was checked'
+    value: ${{ steps.verify.outputs.pr-head-sha }}
 
 runs:
   using: 'composite'
@@ -102,6 +115,10 @@ runs:
         PP_PR_NUMBER: ${{ github.event.pull_request.number }}
         PP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         PP_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PP_MODE: ${{ inputs.mode }}
+        PP_EVENT_NAME: ${{ github.event_name }}
+        PP_SHA: ${{ github.sha }}
+        PP_REF: ${{ github.ref }}
         PP_RUN_ID: ${{ github.run_id }}
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -210,8 +227,62 @@ runs:
           exit 1
         fi
 
+        # Stops the gate before any API call. Always closed: these are
+        # configuration or context errors, not an unavailable PP API.
+        gate_error() {
+          local code="$1"
+          local message="$2"
+          echo "::error title=Permission Protocol::${message}"
+          set_output "approved" "false"
+          set_output "receipt-id" ""
+          set_output "decision" ""
+          set_output "error-code" "$code"
+          set_output "error-message" "$message"
+          set_output "request-id" ""
+          set_output "approval-url" ""
+          exit 1
+        }
+
+        # ---------------------------------------------------------------
+        # Mode. pr gates a pull request; deploy gates shipping a merged PR
+        # by redeeming the receipt its signer approved at the PR gate.
+        # ---------------------------------------------------------------
+        PP_MODE_NORMALIZED=$(echo "${PP_MODE:-auto}" | tr '[:upper:]' '[:lower:]')
+        case "$PP_MODE_NORMALIZED" in
+          auto)
+            case "$PP_EVENT_NAME" in
+              pull_request|pull_request_target) PP_MODE_NORMALIZED=pr ;;
+              push|workflow_dispatch) PP_MODE_NORMALIZED=deploy ;;
+              *) gate_error "PP_UNSUPPORTED_EVENT" "mode=auto cannot choose a mode for '${PP_EVENT_NAME}' events. Set mode: pr or mode: deploy." ;;
+            esac
+            ;;
+          pr|deploy) ;;
+          *) gate_error "PP_INVALID_MODE" "mode must be pr, deploy or auto (got '${PP_MODE}')." ;;
+        esac
+        set_output "mode" "$PP_MODE_NORMALIZED"
+        echo "Mode: ${PP_MODE_NORMALIZED}"
+
+        if [ "$PP_MODE_NORMALIZED" = "pr" ] && [ -z "${PP_PR_NUMBER}" ]; then
+          gate_error "PP_NO_PR_CONTEXT" "mode=pr needs a pull_request event; '${PP_EVENT_NAME}' has no pull request. To gate a deploy after merge, use mode: deploy."
+        fi
+
+        if [ "$PP_MODE_NORMALIZED" = "deploy" ]; then
+          case "$PP_EVENT_NAME" in
+            push|workflow_dispatch) ;;
+            *) gate_error "PP_UNSUPPORTED_EVENT" "mode=deploy runs on push or workflow_dispatch, never on '${PP_EVENT_NAME}'. A pull request cannot redeem a deploy approval." ;;
+          esac
+          # A deploy that does not redeem can be replayed; one that passes with
+          # no receipt is not gated at all. Neither is a deploy gate.
+          if [ "${PP_REDEEM}" = "false" ]; then
+            gate_error "PP_INVALID_CONFIG" "mode=deploy always redeems the receipt so one approval ships once. Remove redeem: false."
+          fi
+          if [ "${PP_FAIL_ON_MISSING}" = "false" ]; then
+            gate_error "PP_INVALID_CONFIG" "mode=deploy always fails without a receipt. Remove fail-on-missing: false."
+          fi
+        fi
+
         REDEEM_JSON=false
-        if [ "${PP_REDEEM}" = "true" ]; then
+        if [ "$PP_MODE_NORMALIZED" = "deploy" ] || [ "${PP_REDEEM}" = "true" ]; then
           REDEEM_JSON=true
         fi
 
@@ -238,9 +309,54 @@ runs:
           fi
         done < <(normalize_csv_items "${PP_PRODUCTION_ENVIRONMENTS}")
 
+        # ---------------------------------------------------------------
+        # Deploy mode: find the PR this commit merged. The receipt a signer
+        # approved is keyed to that PR's head SHA, so that is what we verify.
+        # A commit no PR merged (a direct push) was never approved.
+        # ---------------------------------------------------------------
+        if [ "$PP_MODE_NORMALIZED" = "deploy" ]; then
+          case "$PP_REF" in
+            refs/heads/*) DEPLOY_BRANCH="${PP_REF#refs/heads/}" ;;
+            *) gate_error "PP_UNSUPPORTED_REF" "mode=deploy deploys a branch; '${PP_REF}' is not one." ;;
+          esac
+
+          echo "🔍 Finding the pull request that merged ${PP_SHA:0:10} into ${DEPLOY_BRANCH}..."
+          set +e
+          ASSOCIATED_PRS=$(gh api "repos/${REPO}/commits/${PP_SHA}/pulls" 2>&1)
+          GH_EXIT=$?
+          set -e
+          if [ "$GH_EXIT" -ne 0 ]; then
+            gate_error "PP_PR_LOOKUP_FAILED" "Could not list pull requests for ${PP_SHA:0:10} (the job needs pull-requests: read). ${ASSOCIATED_PRS}"
+          fi
+
+          # merge_commit_sha is the commit a merge, squash or rebase merge left
+          # on the base branch, so it must equal the commit being deployed.
+          MERGED_PRS=$(echo "$ASSOCIATED_PRS" | jq -c --arg sha "$PP_SHA" --arg branch "$DEPLOY_BRANCH" \
+            'if type == "array" then [ .[] | select(.merged_at != null and .merge_commit_sha == $sha and .base.ref == $branch) ] else error("not a list") end' 2>/dev/null || echo "invalid")
+          if [ "$MERGED_PRS" = "invalid" ]; then
+            gate_error "PP_PR_LOOKUP_FAILED" "GitHub returned an unreadable pull request list for ${PP_SHA:0:10}."
+          fi
+          MERGED_COUNT=$(echo "$MERGED_PRS" | jq 'length')
+          if [ "$MERGED_COUNT" -eq 0 ]; then
+            gate_error "PP_NO_MERGED_PR" "${PP_SHA:0:10} on ${DEPLOY_BRANCH} was not produced by merging a pull request, so no signer approved it. Deploy only commits that merged through a gated PR."
+          fi
+          if [ "$MERGED_COUNT" -ne 1 ]; then
+            gate_error "PP_PR_LOOKUP_FAILED" "${MERGED_COUNT} merged pull requests claim ${PP_SHA:0:10}; refusing to guess which approval applies."
+          fi
+
+          PP_PR_NUMBER=$(echo "$MERGED_PRS" | jq -r '.[0].number')
+          PP_PR_HEAD_SHA=$(echo "$MERGED_PRS" | jq -r '.[0].head.sha')
+          PP_PR_BASE_SHA=$(echo "$MERGED_PRS" | jq -r '.[0].base.sha')
+          # The PR is merged; a comment there tells no one about this deploy.
+          PP_POST_COMMENT=false
+          echo "Merged PR: #${PP_PR_NUMBER} (approved head ${PP_PR_HEAD_SHA:0:10})"
+        fi
+        set_output "pr-number" "$PP_PR_NUMBER"
+        set_output "pr-head-sha" "$PP_PR_HEAD_SHA"
+
         # Skip the gate entirely for draft PRs — not ready for review/approval.
         # When the PR is marked ready for review, the gate will run again.
-        if [ -n "${PP_PR_NUMBER}" ]; then
+        if [ "$PP_MODE_NORMALIZED" = "pr" ] && [ -n "${PP_PR_NUMBER}" ]; then
           IS_DRAFT=$(gh pr view "${PP_PR_NUMBER}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
           if [ "$IS_DRAFT" = "true" ]; then
             echo "⏭️  Skipping Permission Protocol gate — PR #${PP_PR_NUMBER} is a draft"
@@ -412,6 +528,9 @@ runs:
             echo ""
             # Details (collapsed in logs, visible if expanded)
             echo "Details: repo=${REPO} pr=#${PP_PR_NUMBER} sha=${PP_PR_HEAD_SHA:0:10}"
+            if [ "$PP_MODE_NORMALIZED" = "deploy" ]; then
+              echo "Deploying ${PP_SHA:0:10}, merged from PR #${PP_PR_NUMBER}. Approve that PR's request, then re-run this workflow."
+            fi
             if [ -n "$REQUEST_ID" ]; then
               echo "Request: ${REQUEST_ID}"
             fi
@@ -432,12 +551,27 @@ runs:
             ;;
           "RECEIPT_ALREADY_REDEEMED")
             echo "❌ FAIL: Receipt already redeemed"
-            echo "This permission has already been consumed."
+            if [ "$PP_MODE_NORMALIZED" = "deploy" ]; then
+              echo "The approval for PR #${PP_PR_NUMBER} was already used by an earlier deploy. One approval ships once."
+            else
+              echo "This permission has already been consumed."
+            fi
             exit 1
             ;;
           "RECEIPT_EXPIRED")
             echo "❌ FAIL: Receipt expired"
-            echo "Request a new approval and re-run."
+            REAPPROVAL_URL=$(echo "$HTTP_BODY" | jq -r 'select(.reapproval.autoRenewEligible == true) | .reapproval.approvalUrl // empty' 2>/dev/null || echo "")
+            REAPPROVAL_REASON=$(echo "$HTTP_BODY" | jq -r '.reapproval.reason // empty' 2>/dev/null || echo "")
+            if [ -n "$REAPPROVAL_URL" ]; then
+              echo "A signer can renew this approval, then re-run this workflow straight away:"
+              echo "  👉 ${REAPPROVAL_URL}"
+              set_output "approval-url" "$REAPPROVAL_URL"
+            else
+              echo "Request a new approval and re-run."
+              if [ -n "$REAPPROVAL_REASON" ]; then
+                echo "Renewal is not available: ${REAPPROVAL_REASON}"
+              fi
+            fi
             exit 1
             ;;
           "RECEIPT_DENIED")

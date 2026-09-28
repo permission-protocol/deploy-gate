@@ -48,6 +48,31 @@ gh secret set PP_API_KEY -b "pp_live_..."
 
 Full install guide: [INSTALL.md](./INSTALL.md)
 
+### Gate the deploy too
+
+On `push` and `workflow_dispatch` the action runs in deploy mode: it finds the PR that merged the commit, verifies that PR's approval, and redeems it once. Put it before your Vercel, Netlify, Railway or Fly.io deploy step and turn off the provider's own Git deploys. See [INSTALL.md](./INSTALL.md#gate-the-deploy-itself-vercel-netlify-railway-flyio).
+
+```yaml
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: permission-protocol/deploy-gate@v2
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+      - run: npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+```
+
 ## Why this exists
 
 AI agents are moving from "suggest text" to "take actions": committing code, modifying workflows, and deploying to production. GitHub controls like branch protection, environments, and required reviewers gate humans, not agents.
