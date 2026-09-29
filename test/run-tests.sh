@@ -82,7 +82,7 @@ run_case() {
     export PP_REDEEM= PP_FAIL_ON_MISSING=true PP_PROTECTED_PATHS='^(deploy/|\.github/workflows/)'
     export PP_FAIL_OPEN_TIMEOUT=30 PP_FAIL_MODE=closed PP_PRODUCTION_ENVIRONMENTS=production,prod,live
     export PP_POST_COMMENT=false PP_REPOSITORY=Acme/Web
-    export PP_PR_NUMBER= PP_PR_HEAD_SHA= PP_PR_BASE_SHA=
+    export PP_PR_NUMBER= PP_PR_HEAD_SHA= PP_PR_BASE_SHA= PP_PR_TITLE=
     export PP_MODE=auto PP_EVENT_NAME=push PP_SHA=mergesha0000000000 PP_REF=refs/heads/main
     export PP_RUN_ID=4242 GH_TOKEN=ghs_test
     for assignment in "$@"; do export "$assignment"; done
@@ -130,6 +130,7 @@ check "scope" "$(request .scope)" '{"repo":"acme/web","prNumber":12,"headSha":"a
 check "redeem" "$(request .redeem)" true
 check "failOnMissing" "$(request .failOnMissing)" true
 check "no draft lookup" "$(grep -c isDraft "$CASE_DIR/gh.log")" 0
+check "no title outside a PR event" "$(request 'has("prTitle")')" false
 
 PULLS="$MERGED" run_case "workflow_dispatch deploys merged PR" PP_EVENT_NAME=workflow_dispatch <<<"$VALID"
 check "exit" "$EXIT_CODE" 0
@@ -244,6 +245,24 @@ check "no PP call" "$(no_request)" none
 
 run_case "pr gate missing receipt, fail-on-missing false" "${PR_CTX[@]}" PP_FAIL_ON_MISSING=false <<<'{"valid": false, "errorCode": "RECEIPT_NOT_FOUND"}'
 check "exit" "$EXIT_CODE" 0
+
+# --- the PR title rides along, so PP can show it without reading GitHub ------
+utf16() { jq -r '[.prTitle | explode[] | if . > 65535 then 2 else 1 end] | add' "$CASE_DIR/request.json"; }
+
+run_case "PR title is sent as JSON, quotes and newlines intact" "${PR_CTX[@]}" "PP_PR_TITLE=$(printf 'Fix "auth" redirect\nloop $(id)')" <<<"$VALID"
+check "exit" "$EXIT_CODE" 0
+check "title" "$(request .prTitle)" '"Fix \"auth\" redirect\nloop $(id)"'
+check "scope unchanged" "$(request .scope)" '{"repo":"acme/web","prNumber":12,"headSha":"approvedhead12","env":"production","capability":"deploy:production"}'
+
+run_case "empty PR title is left out" "${PR_CTX[@]}" PP_PR_TITLE= <<<"$VALID"
+check "no key" "$(request 'has("prTitle")')" false
+
+run_case "long PR title is cut to 300" "${PR_CTX[@]}" "PP_PR_TITLE=$(printf 'x%.0s' $(seq 1 400))" <<<"$VALID"
+check "length" "$(request '.prTitle | length')" 300
+
+run_case "emoji PR title stays within 300 UTF-16 units" "${PR_CTX[@]}" "PP_PR_TITLE=$(for i in $(seq 1 200); do printf '\360\237\232\200'; done)" <<<"$VALID"
+check "code points" "$(request '.prTitle | length')" 150
+check "utf-16 units" "$(utf16)" 300
 
 echo ""
 echo "${PASS} passed, ${FAIL} failed"

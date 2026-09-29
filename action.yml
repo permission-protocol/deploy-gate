@@ -421,9 +421,13 @@ runs:
             changedFiles: $changedFiles
           }
           # The PR title, so the approval page has one even when PP cannot
-          # read the pull request itself. PP accepts at most 300 characters
-          # and rejects null, so the key is trimmed or left out.
-          + (if ($prTitle | length) > 0 then { prTitle: $prTitle[0:300] } else {} end)')
+          # read the pull request itself. PP rejects null and more than 300
+          # UTF-16 units, so the key is left out or cut: 300 code points when
+          # every one is a single unit, else 150 (at most two units each). An
+          # over-long title must not fail the gate closed.
+          + (if ($prTitle | length) == 0 then {}
+             elif ([$prTitle | explode[] | select(. > 65535)] | length) == 0 then { prTitle: $prTitle[0:300] }
+             else { prTitle: $prTitle[0:150] } end)')
 
         echo ""
         echo "═══════════════════════════════════════════════════════════"
