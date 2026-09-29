@@ -147,6 +147,68 @@ If you use **GitHub Repository Rulesets** (recommended) to enforce this check, f
 
 ---
 
+## Gate the deploy itself (Vercel, Netlify, Railway, Fly.io)
+
+The PR gate stops unapproved code merging. To also stop it shipping, run the deploy from a workflow that redeems the same approval. In `mode: deploy` (the default on `push` and `workflow_dispatch`), Deploy Gate:
+
+1. Finds the pull request that merged the commit being deployed.
+2. Verifies the receipt a signer approved for that PR's head commit.
+3. Redeems it, so one approval ships once.
+
+It fails closed when the commit did not come from a merged PR (a direct push), when no approval exists, or when the approval was already used. `redeem: false` and `fail-on-missing: false` are rejected in this mode.
+
+```yaml
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production        # holds the provider token; restrict it to main
+    permissions:
+      contents: read
+      pull-requests: read          # to find the merged PR
+    steps:
+      - uses: actions/checkout@v4
+      - uses: permission-protocol/deploy-gate@v2
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+          # Must match the PR gate's environment and capability.
+      - run: npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+```
+
+Swap the last step for your provider:
+
+| Provider | Deploy step | Turn off its own deploys |
+| --- | --- | --- |
+| Vercel | `npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"` | `"git": { "deploymentEnabled": false }` in `vercel.json` |
+| Netlify | `npx netlify-cli deploy --prod --dir <build dir>` with `NETLIFY_AUTH_TOKEN`, `NETLIFY_SITE_ID` | Site settings → Build & deploy → Stop builds |
+| Railway | `npx @railway/cli up --service <service>` with `RAILWAY_TOKEN` | Service settings → disconnect the GitHub repo trigger |
+| Fly.io | `flyctl deploy --remote-only` with `FLY_API_TOKEN` (via `superfly/flyctl-actions/setup-flyctl`) | Remove any GitHub deploy integration |
+
+The gate only holds if this workflow is the only way to deploy:
+
+- **Turn off the provider's own Git deploys** (table above). Otherwise the provider ships every push to `main` before this workflow runs.
+- **Keep the provider token in a GitHub Environment** restricted to `main`, so a pull request workflow cannot read it.
+- **Gate changes to `.github/workflows/`** at the PR gate, so nobody can delete the deploy gate step without a signature.
+- **Anyone with the provider's dashboard, CLI or token can still deploy around it.** Limit who holds them.
+
+Production approvals expire 15 minutes after they are signed, so merge promptly after approval (GitHub auto-merge does this for you). A deploy that runs after the approval expired fails with `RECEIPT_EXPIRED`. If the gate passed but a later step failed, the approval is already used; re-running fails with `RECEIPT_ALREADY_REDEEMED`.
+
+---
+
 ## Common Errors
 
 ### 401 Unauthorized
