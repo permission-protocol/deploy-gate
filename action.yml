@@ -35,6 +35,10 @@ inputs:
     description: 'Redeem receipt on verify. Defaults to false in pr mode. Deploy mode always redeems; setting false there is an error.'
     required: false
     default: ''
+  allow-carry-forward:
+    description: 'Allow a prior PR-level approval to pass after a PR head changes. Defaults to false so each head SHA needs an explicit receipt.'
+    required: false
+    default: 'false'
   protected-paths:
     description: 'Regex pattern for protected paths used for risk assessment metadata (not gating)'
     required: false
@@ -105,6 +109,7 @@ runs:
         PP_ENVIRONMENT: ${{ inputs.environment }}
         PP_CAPABILITY: ${{ inputs.capability }}
         PP_REDEEM: ${{ inputs.redeem }}
+        PP_ALLOW_CARRY_FORWARD: ${{ inputs.allow-carry-forward }}
         PP_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
         PP_PROTECTED_PATHS: ${{ inputs.protected-paths }}
         PP_FAIL_OPEN_TIMEOUT: ${{ inputs.fail-open-timeout }}
@@ -286,6 +291,11 @@ runs:
         REDEEM_JSON=false
         if [ "$PP_MODE_NORMALIZED" = "deploy" ] || [ "${PP_REDEEM}" = "true" ]; then
           REDEEM_JSON=true
+        fi
+
+        PP_ALLOW_CARRY_FORWARD_NORMALIZED=$(echo "${PP_ALLOW_CARRY_FORWARD:-false}" | tr '[:upper:]' '[:lower:]')
+        if [ "$PP_ALLOW_CARRY_FORWARD_NORMALIZED" != "true" ]; then
+          PP_ALLOW_CARRY_FORWARD_NORMALIZED="false"
         fi
 
         FAIL_ON_MISSING_JSON=true
@@ -492,6 +502,12 @@ runs:
           REVIEW_URL="$APPROVAL_URL"
         fi
 
+        if [ "$VALID" = "true" ] && [ "$CARRIED_FORWARD" = "true" ] && [ "$PP_ALLOW_CARRY_FORWARD_NORMALIZED" != "true" ]; then
+          VALID=false
+          ERROR_CODE="PP_CARRY_FORWARD_DISABLED"
+          ERROR_MESSAGE="Receipt was carried forward from a prior PR approval. Obtain a fresh approval for this exact head SHA or opt into allow-carry-forward."
+        fi
+
         set_output "approved" "$VALID"
         set_output "receipt-id" "$RECEIPT_ID"
         set_output "decision" "$DECISION"
@@ -589,6 +605,18 @@ runs:
             echo "❌ FAIL: Receipt denied"
             if [ -n "$ERROR_MESSAGE" ]; then
               echo "$ERROR_MESSAGE"
+            fi
+            exit 1
+            ;;
+          "PP_CARRY_FORWARD_DISABLED")
+            echo "❌ FAIL: Carried-forward receipt rejected"
+            echo "$ERROR_MESSAGE"
+            echo "Details: repo=${REPO} pr=#${PP_PR_NUMBER} sha=${PP_PR_HEAD_SHA:0:10}"
+            if [ -n "$REQUEST_ID" ]; then
+              echo "Request: ${REQUEST_ID}"
+            fi
+            if [ -n "$REVIEW_URL" ]; then
+              upsert_pr_comment "pending" "$REVIEW_URL"
             fi
             exit 1
             ;;

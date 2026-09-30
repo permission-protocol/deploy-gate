@@ -79,7 +79,7 @@ run_case() {
     export PATH="$WORK/bin:$PATH" STUB_DIR="$CASE_DIR" GITHUB_OUTPUT="$CASE_DIR/outputs"
     export PP_BASE_URL=https://pp.test PP_API_KEY=pp_live_test PP_REQUEST_CREATE_TOKEN=
     export PP_ENVIRONMENT=production PP_CAPABILITY=deploy:production
-    export PP_REDEEM= PP_FAIL_ON_MISSING=true PP_PROTECTED_PATHS='^(deploy/|\.github/workflows/)'
+    export PP_ALLOW_CARRY_FORWARD= PP_REDEEM= PP_FAIL_ON_MISSING=true PP_PROTECTED_PATHS='^(deploy/|\.github/workflows/)'
     export PP_FAIL_OPEN_TIMEOUT=30 PP_FAIL_MODE=closed PP_PRODUCTION_ENVIRONMENTS=production,prod,live
     export PP_POST_COMMENT=false PP_REPOSITORY=Acme/Web
     export PP_PR_NUMBER= PP_PR_HEAD_SHA= PP_PR_BASE_SHA= PP_PR_TITLE=
@@ -245,6 +245,31 @@ check "no PP call" "$(no_request)" none
 
 run_case "pr gate missing receipt, fail-on-missing false" "${PR_CTX[@]}" PP_FAIL_ON_MISSING=false <<<'{"valid": false, "errorCode": "RECEIPT_NOT_FOUND"}'
 check "exit" "$EXIT_CODE" 0
+
+# Carry-forward receipts require explicit opt-in in either mode.
+CARRIED='{"valid":true,"receiptId":"rcpt_1","decision":"APPROVED","carriedForward":true}'
+run_case "carried-forward PR receipt rejected by default" "${PR_CTX[@]}" <<<"$CARRIED"
+check "exit" "$EXIT_CODE" 1
+check "approved" "$(output approved)" false
+check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+
+run_case "carried-forward PR receipt explicitly allowed" "${PR_CTX[@]}" PP_ALLOW_CARRY_FORWARD=TrUe <<<"$CARRIED"
+check "exit" "$EXIT_CODE" 0
+check "approved" "$(output approved)" true
+
+run_case "invalid carry-forward opt-in stays closed" "${PR_CTX[@]}" PP_ALLOW_CARRY_FORWARD=yes <<<"$CARRIED"
+check "exit" "$EXIT_CODE" 1
+check "approved" "$(output approved)" false
+
+PULLS="$MERGED" run_case "carried-forward deploy receipt rejected by default" <<<"$CARRIED"
+check "exit" "$EXIT_CODE" 1
+check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+check "redeem" "$(request .redeem)" true
+
+PULLS="$MERGED" run_case "carried-forward deploy receipt explicitly allowed" PP_ALLOW_CARRY_FORWARD=true <<<"$CARRIED"
+check "exit" "$EXIT_CODE" 0
+check "approved" "$(output approved)" true
+check "redeem" "$(request .redeem)" true
 
 # --- the PR title rides along, so PP can show it without reading GitHub ------
 utf16() { jq -r '[.prTitle | explode[] | if . > 65535 then 2 else 1 end] | add' "$CASE_DIR/request.json"; }
