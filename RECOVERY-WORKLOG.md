@@ -2,6 +2,8 @@
 
 Date: 2026-10-23
 Branch: codex/verify-transient-recovery
+PR: https://github.com/permission-protocol/deploy-gate/pull/71
+Companion PR: https://github.com/permission-protocol/app/pull/792
 Base: origin/main 788dd7b
 Release target: v2.4.0 and the v2 major tag, after required approvals and merge.
 
@@ -18,4 +20,4 @@ Keep transient PP errors from permanently failing a customer deployment while pr
 `bash test/run-tests.sh`: final run passed, 140 assertions and zero failures. Coverage includes transient database/gateway and GitHub policy-read errors, interrupted transfers, human renewal, persistent outages, terminal refusals, PR reads, ambiguous redemption and non-production approval timeouts. Tests use stubbed gh/curl/date/sleep and do not contact GitHub, PP or deployment providers. `git diff --check` passed.
 
 ## Dependencies and limitations
-Open PRs #47 and #48 edit action.yml; inspected their changed files before implementation. They are separate carried-forward-receipt and draft-PR changes, not recovery fixes. This local branch requires review and publication of a new deploy-gate version; the app repository's changes do not update existing customer action pins. No tag moved, PR published, merge or deployment performed. Expired authorization still needs a human signature; persistent outages and ambiguous final redemption responses fail closed with a recovery message.
+Open PRs #47 and #48 edit action.yml; inspected their changed files before implementation. They are separate carried-forward-receipt and draft-PR changes, not recovery fixes. The app repository's changes do not update existing customer action pins. User authorized PR publication, merge and release on 2026-10-23, subject to required checks and human signatures. Publish v2.4.0 and update v2 only to the exact approved merge after checking the branch gate and action tests. Expired authorization still needs a human signature; persistent outages and ambiguous final redemption responses fail closed with a recovery message. No production-secret changes or approval bypasses.
