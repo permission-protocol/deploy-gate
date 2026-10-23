@@ -1,4 +1,4 @@
-# Version: v2.3.0
+# Version: v2.4.0
 name: 'Deploy Gate'
 description: 'Block AI agents from production deploys without a human-signed Ed25519 receipt. Fails closed by default.'
 author: 'Permission Protocol'
@@ -41,6 +41,10 @@ inputs:
     default: '^(deploy/|\.github/workflows/)'
   fail-on-missing:
     description: 'Fail if no receipt exists'
+    required: false
+    default: 'true'
+  wait-for-approval:
+    description: 'In deploy mode, wait up to 30 minutes for a human approval or renewal; transient verification errors are retried in all modes'
     required: false
     default: 'true'
   fail-open-timeout:
@@ -106,6 +110,7 @@ runs:
         PP_CAPABILITY: ${{ inputs.capability }}
         PP_REDEEM: ${{ inputs.redeem }}
         PP_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        PP_WAIT_FOR_APPROVAL: ${{ inputs.wait-for-approval }}
         PP_PROTECTED_PATHS: ${{ inputs.protected-paths }}
         PP_FAIL_OPEN_TIMEOUT: ${{ inputs.fail-open-timeout }}
         PP_FAIL_MODE: ${{ inputs.fail-mode }}
@@ -445,6 +450,73 @@ runs:
           CURL_HEADERS+=( -H "X-PP-Request-Create-Token: ${PP_REQUEST_CREATE_TOKEN}" )
         fi
 
+        # Retry reads, never a potentially consumed redemption. A temporary PP
+        # or provider failure is not an authorization decision (INV-10).
+        READ_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c '.redeem = false')
+        WAIT_SECONDS=300
+        if [ "$PP_MODE_NORMALIZED" = deploy ] && [ "${PP_WAIT_FOR_APPROVAL:-true}" = true ]; then WAIT_SECONDS=1800; fi
+        DEADLINE=$(( $(date +%s) + WAIT_SECONDS ))
+        PRINTED=''
+        while :; do
+          CURL_EXIT=0
+          HTTP_RESPONSE=$(curl -sS -w '\n%{http_code}' --max-time "${PP_FAIL_OPEN_TIMEOUT}" \
+            -X POST "${PP_BASE_URL}/api/v1/receipts/verify" "${CURL_HEADERS[@]}" -d "$READ_BODY") || CURL_EXIT=$?
+          HTTP_BODY=$(printf '%s\n' "$HTTP_RESPONSE" | sed '$d')
+          HTTP_STATUS=$(printf '%s\n' "$HTTP_RESPONSE" | tail -n1)
+          CODE=$(printf '%s' "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null) || CODE=''
+          RETRY=false
+          SIGNING=''
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            # Never trust a partially transferred success body.
+            RETRY=true
+            HTTP_BODY=''
+          elif [ "$HTTP_STATUS" = 200 ] && [ -z "$CODE" ] && [ "$(printf '%s' "$HTTP_BODY" | jq -r '(.valid == true) or (.result.valid == true)' 2>/dev/null)" = true ]; then
+            break
+          else
+            case "$CODE $HTTP_STATUS" in
+              'INTERNAL_ERROR 500'|'RATE_LIMITED 429'|'POLICY_UNAVAILABLE 503'|' 429'|' 500'|' 502'|' 503'|' 504') RETRY=true ;;
+              'POLICY_AUTHORIZATION_REQUIRED 409')
+                POLICY=$(printf '%s' "$HTTP_BODY" | jq -r '.policyRead.code // empty')
+                case "$POLICY" in
+                  GITHUB_RATE_LIMITED|GITHUB_TIMEOUT|GITHUB_NETWORK_ERROR|GITHUB_TOKEN_SERVICE_UNAVAILABLE) RETRY=true ;;
+                  GITHUB_REPO_UNREADABLE)
+                    if [[ "$(printf '%s' "$HTTP_BODY" | jq -r '.policyRead.githubStatus // empty')" =~ ^5[0-9][0-9]$ ]]; then RETRY=true; fi ;;
+                  POLICY_APPROVAL_PENDING) SIGNING=yes ;;
+                esac ;;
+              'RECEIPT_NOT_FOUND 404'|'PP_NO_RECEIPT 404'|'PP_APPROVAL_REQUIRED 409'|'WORKSPACE_SIGNATURE_REQUIRED 409') SIGNING=yes ;;
+              'RECEIPT_EXPIRED 410')
+                if [ "$(printf '%s' "$HTTP_BODY" | jq -r '.reapproval.autoRenewEligible == true')" = true ]; then SIGNING=renew
+                elif [ "$(printf '%s' "$HTTP_BODY" | jq -r '.reapproval.reason // empty')" = 'Receipt has not expired' ]; then RETRY=true; fi ;;
+            esac
+          fi
+          if [ "$SIGNING" != '' ] && [ "$PP_MODE_NORMALIZED" = deploy ] && [ "${PP_WAIT_FOR_APPROVAL:-true}" = true ]; then
+            POINTER=$(printf '%s' "$HTTP_BODY" | jq -r '.renewalUrl // .reapproval.approvalUrl // .approvalUrl // empty')
+            if [ "$SIGNING" = renew ]; then POINTER="${POINTER%/renew}/renew"; fi
+            if [[ "$POINTER" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?/approve/[a-zA-Z0-9_-]+(/renew)?$ ]]; then
+              RETRY=true
+              if [ "$POINTER" != "$PRINTED" ]; then
+                echo "Waiting for human approval: ${POINTER}. This run resumes automatically."
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  printf '### Deployment is waiting for your signature\n\n[Review and sign](%s). This run resumes automatically.\n' "$POINTER" >> "$GITHUB_STEP_SUMMARY"
+                fi
+                PRINTED="$POINTER"
+              fi
+            fi
+          fi
+          if [ "$RETRY" != true ]; then break; fi
+          if (( $(date +%s) + 15 >= DEADLINE )); then
+            if [ -n "$PRINTED" ]; then
+              gate_error "PP_APPROVAL_TIMEOUT" "Approval wait ended after ${WAIT_SECONDS}s. Nothing was redeemed or deployed. Review and sign: ${PRINTED}. Retry the newest deployment with current authorization."
+            fi
+            handle_unavailable "Verification wait ended after ${WAIT_SECONDS}s. Nothing was redeemed or deployed. ${PRINTED:+Review and sign: $PRINTED. }Retry the newest deployment once PP is available and authorization is current."
+          fi
+          if [ -z "$SIGNING" ]; then echo "Permission Protocol verification is temporarily unavailable; retrying without redeeming."; fi
+          sleep 15
+        done
+
+        # The successful read is sufficient in PR mode. Deploy mode submits
+        # exactly one redemption; a lost/500 response must never replay it.
+        if [ "$REDEEM_JSON" = true ] && [ "$HTTP_STATUS" = 200 ] && [ -z "$CODE" ] && [ "$(printf '%s' "$HTTP_BODY" | jq -r '(.valid == true) or (.result.valid == true)' 2>/dev/null)" = true ]; then
         set +e
         HTTP_RESPONSE=$(curl -sS -w "\n%{http_code}" \
           --max-time "${PP_FAIL_OPEN_TIMEOUT}" \
@@ -453,13 +525,20 @@ runs:
           -d "${REQUEST_BODY}")
         CURL_EXIT=$?
         set -e
+        fi
 
         if [ "$CURL_EXIT" -ne 0 ]; then
+          if [ "$REDEEM_JSON" = true ]; then
+            gate_error "PP_REDEMPTION_UNCERTAIN" "Redemption response was lost (curl exit ${CURL_EXIT}). No response is trusted or replayed; inspect this attempt before retrying."
+          fi
           handle_unavailable "API request failed (curl exit ${CURL_EXIT})"
         fi
 
         HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
         HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
+        if [ "$REDEEM_JSON" = true ] && [[ "$HTTP_STATUS" =~ ^5[0-9][0-9]$ ]]; then
+          gate_error "PP_REDEMPTION_UNCERTAIN" "Redemption returned HTTP ${HTTP_STATUS}. It may already have consumed the receipt; inspect this attempt before retrying. No redemption is replayed."
+        fi
 
         if [ -z "$HTTP_BODY" ] || [ "$HTTP_STATUS" = "000" ]; then
           handle_unavailable "Empty response from Permission Protocol"
@@ -471,6 +550,7 @@ runs:
         DECISION=$(echo "$HTTP_BODY" | jq -r '.decision // .result.decision // empty' 2>/dev/null || echo "")
         ERROR_CODE=$(echo "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null || echo "")
         ERROR_MESSAGE=$(echo "$HTTP_BODY" | jq -r '.errorMessage // .result.errorMessage // .error.message // empty' 2>/dev/null || echo "")
+        if [ "$HTTP_STATUS" != 200 ] || [ -n "$ERROR_CODE" ]; then VALID=false; fi
         REQUEST_ID=$(echo "$HTTP_BODY" | jq -r '.requestId // .result.requestId // empty' 2>/dev/null || echo "")
         APPROVAL_URL=$(echo "$HTTP_BODY" | jq -r '.approvalUrl // .result.approvalUrl // empty' 2>/dev/null || echo "")
         SKIP_REASON=$(echo "$HTTP_BODY" | jq -r '.creationSkippedReason // .result.creationSkippedReason // empty' 2>/dev/null || echo "")

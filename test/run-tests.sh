@@ -52,13 +52,29 @@ cat > "$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >> "$STUB_DIR/curl.log"
 while [ $# -gt 0 ]; do
-  if [ "$1" = "-d" ]; then printf '%s' "$2" > "$STUB_DIR/request.json"; fi
+  if [ "$1" = "-d" ]; then printf '%s' "$2" > "$STUB_DIR/request.json"; printf '%s' "$2" | jq -c . >> "$STUB_DIR/requests.jsonl"; fi
   shift
 done
+if [ -n "${STUB_SEQUENCE:-}" ]; then
+  n=$(( $(cat "$STUB_DIR/call-count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_DIR/call-count"
+  reply=$(printf '%s' "$STUB_SEQUENCE" | jq -c --argjson i "$((n - 1))" '.[$i] // .[-1]')
+  printf '%s' "$reply" | jq -r '.body | if type == "string" then . else tojson end'
+  printf '\n%s' "$(printf '%s' "$reply" | jq -r '.http')"
+  exit "$(printf '%s' "$reply" | jq -r '.exit // 0')"
+fi
 cat "$STUB_DIR/response.json"
 printf '\n%s' "${STUB_STATUS:-200}"
 STUB
 chmod +x "$WORK/bin/gh" "$WORK/bin/curl"
+cat > "$WORK/bin/date" <<'STUB'
+#!/usr/bin/env bash
+cat "$STUB_DIR/clock" 2>/dev/null || echo 0
+STUB
+cat > "$WORK/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+echo $(( $(cat "$STUB_DIR/clock" 2>/dev/null || echo 0) + ${STUB_TICK:-15} )) > "$STUB_DIR/clock"
+STUB
+chmod +x "$WORK/bin/date" "$WORK/bin/sleep"
 
 PASS=0
 FAIL=0
@@ -206,7 +222,7 @@ PULLS="$MERGED" run_case "receipt expired" <<<'{"valid": false, "errorCode": "RE
 check "exit" "$EXIT_CODE" 1
 check "error" "$(output error-code)" RECEIPT_EXPIRED
 
-PULLS="$MERGED" run_case "expired, signer can renew" <<<'{"result": {"valid": false, "errorCode": "RECEIPT_EXPIRED"}, "reapproval": {"autoRenewEligible": true, "requestId": "req_3", "approvalUrl": "https://pp.test/approve/req_3"}}'
+PULLS="$MERGED" run_case "expired, signer can renew, opt-out wait" PP_WAIT_FOR_APPROVAL=false <<<'{"result": {"valid": false, "errorCode": "RECEIPT_EXPIRED"}, "reapproval": {"autoRenewEligible": true, "requestId": "req_3", "approvalUrl": "https://pp.test/approve/req_3"}}'
 check "exit" "$EXIT_CODE" 1
 check "error" "$(output error-code)" RECEIPT_EXPIRED
 check "renew link" "$(output approval-url)" https://pp.test/approve/req_3
@@ -263,6 +279,91 @@ check "length" "$(request '.prTitle | length')" 300
 run_case "emoji PR title stays within 300 UTF-16 units" "${PR_CTX[@]}" "PP_PR_TITLE=$(for i in $(seq 1 200); do printf '\360\237\232\200'; done)" <<<"$VALID"
 check "code points" "$(request '.prTitle | length')" 150
 check "utf-16 units" "$(utf16)" 300
+
+# --- transient recovery never retries a redemption --------------------------
+sequence_redeems() { jq -sc 'map(.redeem)' "$CASE_DIR/requests.jsonl"; }
+for code in INTERNAL_ERROR RATE_LIMITED POLICY_UNAVAILABLE; do
+  case "$code" in INTERNAL_ERROR) status=500 ;; RATE_LIMITED) status=429 ;; *) status=503 ;; esac
+  sequence=$(jq -cn --arg code "$code" --argjson status "$status" --argjson valid "$VALID" '[{http:$status,body:{error:{code:$code}}},{http:200,body:$valid},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "recovers from $code" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 0
+  check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+  check "exact artifact preserved" "$(jq -sc 'map(.scope) | unique | length' "$CASE_DIR/requests.jsonl")" 1
+done
+
+for status in 429 500 502 503 504; do
+  sequence=$(jq -cn --argjson status "$status" --argjson valid "$VALID" '[{http:$status,body:"<html>Unavailable</html>"},{http:200,body:$valid},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "gateway $status recovers" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 0
+  check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+done
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid,exit:18},{http:200,body:$valid},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "partial success is discarded" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+
+for code in RECEIPT_DENIED RECEIPT_REVOKED SIGNATURE_INVALID TENANT_KEY_MISSING POLICY_CHANGED; do
+  sequence=$(jq -cn --arg code "$code" --argjson valid "$VALID" '[{http:503,body:{error:{code:$code}}},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "never retries refusal $code" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 1
+  check "no redemption" "$(sequence_redeems)" '[false]'
+done
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:500,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "ambiguous redemption is never replayed" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "uncertain redemption" "$(output error-code)" PP_REDEMPTION_UNCERTAIN
+check "one redemption" "$(sequence_redeems)" '[false,true]'
+
+sequence='[{"http":500,"body":{"error":{"code":"INTERNAL_ERROR"}}}]'
+PULLS="$MERGED" run_case "outage ends closed at deadline" STUB_SEQUENCE="$sequence" STUB_TICK=1800 <<<''
+check "exit" "$EXIT_CODE" 1
+check "no redemption" "$(sequence_redeems)" '[false,false]'
+check "recovery message" "$(grep -c 'Nothing was redeemed or deployed' "$CASE_DIR/stdout")" 1
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:410,body:{result:{valid:false,errorCode:"RECEIPT_EXPIRED"},reapproval:{autoRenewEligible:true,approvalUrl:"https://pp.test/approve/req_3"}}},{http:200,body:$valid},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "waits for human renewal and resumes" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+check "renewal link" "$(grep -c 'https://pp.test/approve/req_3/renew' "$CASE_DIR/stdout")" 1
+
+for policy in GITHUB_RATE_LIMITED GITHUB_TIMEOUT GITHUB_NETWORK_ERROR GITHUB_TOKEN_SERVICE_UNAVAILABLE; do
+  sequence=$(jq -cn --arg policy "$policy" --argjson valid "$VALID" '[{http:409,body:{errorCode:"POLICY_AUTHORIZATION_REQUIRED",policyRead:{code:$policy}}},{http:200,body:$valid},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "recovers policy read $policy" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 0
+  check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+done
+
+for status in 401 403; do
+  sequence=$(jq -cn --argjson status "$status" --argjson valid "$VALID" '[{http:$status,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "authentication refusal $status is terminal" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 1
+  check "no redemption" "$(sequence_redeems)" '[false]'
+done
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:500,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$valid}]')
+run_case "PR read recovers without redemption" "${PR_CTX[@]}" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "reads only" "$(sequence_redeems)" '[false,false]'
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,body:$valid,exit:18},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "truncated redemption success is never accepted or replayed" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "uncertain redemption" "$(output error-code)" PP_REDEMPTION_UNCERTAIN
+check "one redemption" "$(sequence_redeems)" '[false,true]'
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:410,body:{result:{valid:false,errorCode:"RECEIPT_EXPIRED"},reapproval:{autoRenewEligible:false,reason:"Receipt has not expired"}}},{http:200,body:$valid},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "renewal concurrent with read recovers" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+
+sequence='[{"http":404,"body":{"valid":false,"errorCode":"RECEIPT_NOT_FOUND","approvalUrl":"https://pp.test/approve/req_3"}}]'
+PULLS="$MERGED" run_case "missing human approval never becomes a non-production fail-open" STUB_SEQUENCE="$sequence" STUB_TICK=1800 PP_ENVIRONMENT=staging PP_FAIL_MODE=open <<<''
+check "exit" "$EXIT_CODE" 1
+check "approval timed out" "$(output error-code)" PP_APPROVAL_TIMEOUT
+check "not approved" "$(output approved)" false
+check "no redemption" "$(sequence_redeems)" '[false,false]'
 
 echo ""
 echo "${PASS} passed, ${FAIL} failed"

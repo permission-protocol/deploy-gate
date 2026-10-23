@@ -93,6 +93,9 @@ When audit time comes, you do not want to hand over a mutable PR comment thread.
 
 Inputs:
 
+- `wait-for-approval`: defaults to `true`. In deploy mode, wait up to 30 minutes for a human approval or renewal and resume automatically. PR mode still returns missing approvals immediately so the PR can show its signing link. Set `false` to return missing or expired approvals immediately in deploy mode.
+- Transient verification failures (network errors, HTTP 500/502/503/504, rate limits and temporary GitHub policy-read failures) recover through non-redeeming reads every 15 seconds. PR mode and deploy mode with approval waiting disabled have a five-minute recovery budget. Denials, auth/scope failures, revoked or invalid signatures and unavailable tenant keys stop immediately. A final redeeming request is sent only once; a lost response requires inspection before retrying. Production never fails open.
+
 - `fail-mode`: `closed` (default) or `open` — only honored in non-production environments.
 - `production-environments`: comma-separated environment names treated as production, default `production,prod,live`.
 - `fail-open-timeout`: API timeout in seconds. It controls timeout duration only, not failure policy.
