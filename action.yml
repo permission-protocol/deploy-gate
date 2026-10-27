@@ -95,6 +95,12 @@ outputs:
   pr-head-sha:
     description: 'The approved head SHA that was checked'
     value: ${{ steps.verify.outputs.pr-head-sha }}
+  recovery-safe:
+    description: 'Only a read-only deployment wait ended; no final redemption was attempted'
+    value: ${{ steps.verify.outputs.recovery-safe }}
+  recovery-reason:
+    description: 'Typed reason for a recoverable stopped wait'
+    value: ${{ steps.verify.outputs.recovery-reason }}
 
 runs:
   using: 'composite'
@@ -127,6 +133,9 @@ runs:
         PP_SHA: ${{ github.sha }}
         PP_REF: ${{ github.ref }}
         PP_RUN_ID: ${{ github.run_id }}
+        PP_RUN_ATTEMPT: ${{ github.run_attempt }}
+        PP_JOB_CONTEXT: ${{ github.job }}
+        PP_ACTION_CONTEXT: ${{ github.action }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
@@ -439,6 +448,15 @@ runs:
         echo "  🔐 PERMISSION PROTOCOL - Deploy Authorization Required"
         echo "═══════════════════════════════════════════════════════════"
 
+        PP_REDEMPTION_ATTEMPT_HASH=''
+        if [ "$REDEEM_JSON" = true ]; then
+          if ! [[ "${PP_RUN_ID:-}" =~ ^[0-9]+$ && "${PP_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]] || [ -z "${PP_JOB_CONTEXT:-}" ] || [ -z "${PP_ACTION_CONTEXT:-}" ]; then
+            gate_error PP_RECOVERY_CONTEXT_MISSING 'Exact workflow attempt context is required before redemption.'
+          fi
+          REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg run "$PP_RUN_ID" '.redeemRunId = $run')
+          PP_REDEMPTION_ATTEMPT_HASH=$(printf '%s\0%s\0%s\0%s\0%s' "$PP_RUN_ID" "$PP_RUN_ATTEMPT" "$PP_JOB_CONTEXT" "$PP_ACTION_CONTEXT" "$REQUEST_BODY" | sha256sum | cut -d' ' -f1)
+          REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg hash "$PP_REDEMPTION_ATTEMPT_HASH" '.redeemAttemptHash = $hash')
+        fi
         CURL_HEADERS=(
           -H "Content-Type: application/json"
           -H "X-PP-API-Key: ${PP_API_KEY}"
@@ -505,6 +523,12 @@ runs:
           fi
           if [ "$RETRY" != true ]; then break; fi
           if (( $(date +%s) + 15 >= DEADLINE )); then
+            if [ "$PP_MODE_NORMALIZED" = deploy ] && [ "$REDEEM_JSON" = true ]; then
+              set_output recovery-safe true
+              if [ -n "$PRINTED" ]; then set_output recovery-reason approval_wait; else set_output recovery-reason provider_unavailable; fi
+              RECOVERY_RETRY_AT=$(printf '%s' "$HTTP_BODY" | jq -r '.policyRead.retryAt // .error.meta.readIssue.retryAt // .retryAt // empty' 2>/dev/null || true)
+              if [[ "$RECOVERY_RETRY_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{3})?Z$ ]]; then set_output recovery-retry-at "$RECOVERY_RETRY_AT"; fi
+            fi
             if [ -n "$PRINTED" ]; then
               gate_error "PP_APPROVAL_TIMEOUT" "Approval wait ended after ${WAIT_SECONDS}s. Nothing was redeemed or deployed. Review and sign: ${PRINTED}. Retry the newest deployment with current authorization."
             fi
@@ -516,7 +540,14 @@ runs:
 
         # The successful read is sufficient in PR mode. Deploy mode submits
         # exactly one redemption; a lost/500 response must never replay it.
+        REDEMPTION_SENT=false
         if [ "$REDEEM_JSON" = true ] && [ "$HTTP_STATUS" = 200 ] && [ -z "$CODE" ] && [ "$(printf '%s' "$HTTP_BODY" | jq -r '(.valid == true) or (.result.valid == true)' 2>/dev/null)" = true ]; then
+        REDEMPTION_SENT=true
+        SELECTED_RECEIPT_ID=$(printf '%s' "$HTTP_BODY" | jq -r '.result.receipt.id // .receipt.id // .receiptId // .result.receiptId // empty')
+        if [ -z "$SELECTED_RECEIPT_ID" ]; then gate_error PP_RECEIPT_ID_MISSING 'The exact receipt could not be established before redemption.'; fi
+        REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg id "$SELECTED_RECEIPT_ID" '.receiptId = $id | del(.redeemAttemptHash)')
+        PP_REDEMPTION_ATTEMPT_HASH=$(printf '%s\0%s\0%s\0%s\0%s' "$PP_RUN_ID" "$PP_RUN_ATTEMPT" "$PP_JOB_CONTEXT" "$PP_ACTION_CONTEXT" "$REQUEST_BODY" | sha256sum | cut -d' ' -f1)
+        REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg hash "$PP_REDEMPTION_ATTEMPT_HASH" '.redeemAttemptHash = $hash')
         set +e
         HTTP_RESPONSE=$(curl -sS -w "\n%{http_code}" \
           --max-time "${PP_FAIL_OPEN_TIMEOUT}" \
@@ -527,6 +558,14 @@ runs:
         set -e
         fi
 
+        FINAL_STATUS=$(printf '%s\n' "$HTTP_RESPONSE" | tail -n1)
+        FINAL_BODY=$(printf '%s\n' "$HTTP_RESPONSE" | sed '$d')
+        if [ "$REDEMPTION_SENT" = true ] && { [ "$CURL_EXIT" -ne 0 ] || [[ "$FINAL_STATUS" =~ ^5[0-9][0-9]$ ]] || ! printf '%s' "$FINAL_BODY" | jq -e '(.valid | type == "boolean") or (.success | type == "boolean") or (.result.valid | type == "boolean")' >/dev/null 2>&1; }; then
+          PP_REDEEM=true
+          CHECK_RUN_HEADERS=()
+          source "${GITHUB_ACTION_PATH}/reconcile-redemption.sh"
+          if pp_reconcile_redemption; then CURL_EXIT=0; fi
+        fi
         if [ "$CURL_EXIT" -ne 0 ]; then
           if [ "$REDEEM_JSON" = true ]; then
             gate_error "PP_REDEMPTION_UNCERTAIN" "Redemption response was lost (curl exit ${CURL_EXIT}). No response is trusted or replayed; inspect this attempt before retrying."
@@ -705,3 +744,21 @@ runs:
             exit 1
             ;;
         esac
+    - name: Record the stopped read-only wait
+      id: recovery-record
+      if: failure() && steps.verify.outputs.recovery-safe == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      shell: bash
+      env:
+        PP_RECOVERY_SAFE: ${{ steps.verify.outputs.recovery-safe }}
+        PP_RECOVERY_REASON: ${{ steps.verify.outputs.recovery-reason }}
+        PP_RECOVERY_RETRY_AT: ${{ steps.verify.outputs.recovery-retry-at }}
+        PP_RECOVERY_WORKFLOW_REF: ${{ github.workflow_ref }}
+      run: node "$GITHUB_ACTION_PATH/scripts/deployment-recovery.mjs" record
+    - name: Persist the stopped read-only wait
+      if: failure() && steps.recovery-record.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: pp-deployment-recovery-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.recovery-record.outputs.safe == 'true' && 'retry' || 'inspection' }}
+        path: .pp-recovery/record/recovery.json
+        retention-days: 30
+        if-no-files-found: error

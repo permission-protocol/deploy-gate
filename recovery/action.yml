@@ -1,0 +1,74 @@
+name: Recover stopped deployment waits
+description: Recheck and resume the newest confirmed read-only deployment wait through its original approval gate
+inputs:
+  workflow-file:
+    description: 'Deployment workflow filename, such as deploy.yml'
+    required: true
+  branch:
+    description: 'The reviewed deployment branch'
+    default: main
+  job-name:
+    description: 'Exact display name of the deployment job (single-job workflows only)'
+    required: true
+  gate-steps:
+    description: 'JSON array of exact approval step names in order; the final entry redeems this deployment'
+    required: true
+  execution-steps:
+    description: 'JSON array of every deployment submission step name'
+    required: true
+  github-token:
+    description: 'Repository workflow token with Actions write and Contents read; never a PP key or PAT'
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Find newest stopped wait
+      id: inspect
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PP_RECOVERY_WORKFLOW_PATH: .github/workflows/${{ inputs.workflow-file }}
+        PP_RECOVERY_BRANCH: ${{ inputs.branch }}
+        PP_RECOVERY_JOB: ${{ inputs.job-name }}
+        PP_RECOVERY_GATES: ${{ inputs.gate-steps }}
+        PP_RECOVERY_EFFECTS: ${{ inputs.execution-steps }}
+      run: node "$GITHUB_ACTION_PATH/../scripts/deployment-recovery.mjs" inspect
+    - name: Read the stopped wait record
+      if: steps.inspect.outputs.run_id != ''
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ steps.inspect.outputs.artifact_name }}
+        run-id: ${{ steps.inspect.outputs.run_id }}
+        github-token: ${{ inputs.github-token }}
+        path: .pp-recovery/record
+    - name: Check current execution and retry deadline
+      id: prepare
+      if: steps.inspect.outputs.run_id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PP_RECOVERY_WORKFLOW_PATH: .github/workflows/${{ inputs.workflow-file }}
+        PP_RECOVERY_BRANCH: ${{ inputs.branch }}
+        PP_RECOVERY_JOB: ${{ inputs.job-name }}
+        PP_RECOVERY_GATES: ${{ inputs.gate-steps }}
+        PP_RECOVERY_EFFECTS: ${{ inputs.execution-steps }}
+      run: node "$GITHUB_ACTION_PATH/../scripts/deployment-recovery.mjs" prepare
+    - name: Persist retry submission before requesting it
+      if: steps.prepare.outputs.submit == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.prepare.outputs.submission_name }}
+        path: .pp-recovery/submission/submission.json
+        retention-days: 30
+        if-no-files-found: error
+    - name: Request one normal gated retry
+      if: steps.prepare.outputs.submit == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PP_RECOVERY_WORKFLOW_PATH: .github/workflows/${{ inputs.workflow-file }}
+        PP_RECOVERY_BRANCH: ${{ inputs.branch }}
+        PP_RECOVERY_JOB: ${{ inputs.job-name }}
+        PP_RECOVERY_GATES: ${{ inputs.gate-steps }}
+        PP_RECOVERY_EFFECTS: ${{ inputs.execution-steps }}
+      run: node "$GITHUB_ACTION_PATH/../scripts/deployment-recovery.mjs" submit

@@ -16,6 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 SCRIPT="$WORK/verify.sh"
 awk '
   /^      run: \|$/ { inrun = 1; next }
+  inrun && /^    - / { exit }
   inrun { sub(/^        /, ""); print }
 ' "$ROOT/action.yml" > "$SCRIPT"
 if ! grep -q 'receipts/verify' "$SCRIPT"; then
@@ -57,6 +58,11 @@ while [ $# -gt 0 ]; do
 done
 if [ -n "${STUB_SEQUENCE:-}" ]; then
   n=$(( $(cat "$STUB_DIR/call-count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_DIR/call-count"
+  if [ "${STUB_RECOVER_REDEMPTION:-}" = 1 ] && [ "$n" -gt 2 ]; then
+    jq -cn --arg hash "$(jq -r .redeemAttemptHash "$STUB_DIR/request.json")" --arg id "$(jq -r .receiptId "$STUB_DIR/request.json")" \
+      '{success:true,result:{valid:true,receipt:{id:$id,decision:"APPROVED",redeemedAt:"2026-10-27T16:00:00Z",redeemedRunId:"4242",redeemAttemptHash:$hash,demo:false}}}'
+    printf '\n200'; exit 0
+  fi
   reply=$(printf '%s' "$STUB_SEQUENCE" | jq -c --argjson i "$((n - 1))" '.[$i] // .[-1]')
   printf '%s' "$reply" | jq -r '.body | if type == "string" then . else tojson end'
   printf '\n%s' "$(printf '%s' "$reply" | jq -r '.http')"
@@ -100,7 +106,8 @@ run_case() {
     export PP_POST_COMMENT=false PP_REPOSITORY=Acme/Web
     export PP_PR_NUMBER= PP_PR_HEAD_SHA= PP_PR_BASE_SHA= PP_PR_TITLE=
     export PP_MODE=auto PP_EVENT_NAME=push PP_SHA=mergesha0000000000 PP_REF=refs/heads/main
-    export PP_RUN_ID=4242 GH_TOKEN=ghs_test
+    export PP_RUN_ID=4242 PP_RUN_ATTEMPT=1 PP_JOB_CONTEXT=deploy PP_ACTION_CONTEXT=verify GH_TOKEN=ghs_test
+    export GITHUB_ACTION_PATH="$ROOT"
     for assignment in "$@"; do export "$assignment"; done
     bash "$SCRIPT"
   ) > "$CASE_DIR/stdout" 2>&1
@@ -314,7 +321,8 @@ sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:500,bo
 PULLS="$MERGED" run_case "ambiguous redemption is never replayed" STUB_SEQUENCE="$sequence" <<<''
 check "exit" "$EXIT_CODE" 1
 check "uncertain redemption" "$(output error-code)" PP_REDEMPTION_UNCERTAIN
-check "one redemption" "$(sequence_redeems)" '[false,true]'
+check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | length')" 1
+check "recovery reads only" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
 
 sequence='[{"http":500,"body":{"error":{"code":"INTERNAL_ERROR"}}}]'
 PULLS="$MERGED" run_case "outage ends closed at deadline" STUB_SEQUENCE="$sequence" STUB_TICK=1800 <<<''
@@ -351,7 +359,8 @@ sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,bo
 PULLS="$MERGED" run_case "truncated redemption success is never accepted or replayed" STUB_SEQUENCE="$sequence" <<<''
 check "exit" "$EXIT_CODE" 1
 check "uncertain redemption" "$(output error-code)" PP_REDEMPTION_UNCERTAIN
-check "one redemption" "$(sequence_redeems)" '[false,true]'
+check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | length')" 1
+check "recovery reads only" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
 
 sequence=$(jq -cn --argjson valid "$VALID" '[{http:410,body:{result:{valid:false,errorCode:"RECEIPT_EXPIRED"},reapproval:{autoRenewEligible:false,reason:"Receipt has not expired"}}},{http:200,body:$valid},{http:200,body:$valid}]')
 PULLS="$MERGED" run_case "renewal concurrent with read recovers" STUB_SEQUENCE="$sequence" <<<''
@@ -366,5 +375,13 @@ check "not approved" "$(output approved)" false
 check "no redemption" "$(sequence_redeems)" '[false,false]'
 
 echo ""
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,body:$valid,exit:18}]')
+PULLS="$MERGED" run_case "lost final response recovers the exact recorded attempt by read" STUB_SEQUENCE="$sequence" STUB_RECOVER_REDEMPTION=1 <<<''
+check "exit" "$EXIT_CODE" 0
+check "approved" "$(output approved)" true
+check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | length')" 1
+check "recovered through reads" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
+
 echo "${PASS} passed, ${FAIL} failed"
+node --test "$ROOT/test/recovery.test.mjs" || exit 1
 [ "$FAIL" -eq 0 ]
