@@ -383,5 +383,5 @@ check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | len
 check "recovered through reads" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
 
 echo "${PASS} passed, ${FAIL} failed"
-node --test "$ROOT/test/recovery.test.mjs" || exit 1
+node --test "$ROOT/test/recovery.test.mjs" "$ROOT/test/permission-gate.test.mjs" || exit 1
 [ "$FAIL" -eq 0 ]

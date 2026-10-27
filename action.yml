@@ -166,10 +166,10 @@ runs:
             body=$(printf "⏳ **Permission Protocol:** Approval required\n[Review & approve →](%s)\n\n%s" "$url" "$marker")
           fi
 
-          local comments_url="https://api.github.com/repos/${{ github.repository }}/issues/${PP_PR_NUMBER}/comments?per_page=100"
+          local comments_url="https://api.github.com/repos/${PP_REPOSITORY}/issues/${PP_PR_NUMBER}/comments?per_page=100"
           local comments_response
           comments_response=$(curl -sS \
-            -H "Authorization: token ${{ github.token }}" \
+            -H "Authorization: token ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "$comments_url" || true)
 
@@ -177,15 +177,15 @@ runs:
           comment_id=$(echo "$comments_response" | jq -r '.[] | select((.body | contains("permission-protocol-comment")) or (.body | contains("**Permission Protocol:**"))) | .id' 2>/dev/null | head -n1 || true)
 
           if [ -n "$comment_id" ]; then
-            curl -sS -X PATCH "https://api.github.com/repos/${{ github.repository }}/issues/comments/${comment_id}" \
-              -H "Authorization: token ${{ github.token }}" \
+            curl -sS -X PATCH "https://api.github.com/repos/${PP_REPOSITORY}/issues/comments/${comment_id}" \
+              -H "Authorization: token ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/json" \
               -d "$(jq -n --arg body "$body" '{body: $body}')" > /dev/null 2>&1 || \
               echo "⚠️ Failed to update PR comment (non-fatal)"
           else
-            curl -sS -X POST "https://api.github.com/repos/${{ github.repository }}/issues/${PP_PR_NUMBER}/comments" \
-              -H "Authorization: token ${{ github.token }}" \
+            curl -sS -X POST "https://api.github.com/repos/${PP_REPOSITORY}/issues/${PP_PR_NUMBER}/comments" \
+              -H "Authorization: token ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/json" \
               -d "$(jq -n --arg body "$body" '{body: $body}')" > /dev/null 2>&1 || \

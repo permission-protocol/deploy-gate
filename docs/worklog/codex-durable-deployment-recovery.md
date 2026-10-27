@@ -28,3 +28,11 @@ No approval bypass, TTL extension, secret access or new PP credential privileges
 ## Publication review
 
 Refreshed origin/main to 214e1de on 2026-10-27; no existing PR uses this branch. Reviewed #47 (carry-forward default), #48 (draft-PR behavior) and #67 (fix.md only). #47/#48 overlap action.yml and documentation/tests; their separate proposals are not folded into this diff. Publication is a draft PR only. The companion server must ship before an Action release; uncertain responses against older servers remain fail-closed.
+
+## CI repair after publication
+
+- The required gate job failed before any approval request: GitHub rejected the released v2.4.0 composite's large Bash body because six embedded GitHub expressions exceeded its 21,000-character expression limit. Use the existing `PP_REPOSITORY` and `GH_TOKEN` environment mappings inside that body instead.
+- Bootstrap this repository's gate from immutable released commit `214e1de8d966e1b757b172f6d0fae41620307e15`, verifying the original Action SHA-256 before replacing only those six equivalent interpolations. Candidate Action code never handles this gate's credentials. An unexpected release digest, script structure or expression fails closed.
+- Preserve the same production/deploy:main inputs and explicit closed failure mode. Re-run the gate on ready_for_review. The active App-pinned `permission-protocol/approval` ruleset (integration 3065051) and required `Permission Protocol` job were inspected and remain unchanged. The PR remains draft; no merge, tag or release occurred.
+- `node --test test/recovery.test.mjs test/permission-gate.test.mjs`: 8 passed, including actual released-code normalization and tamper refusal.
+- `bash test/run-tests.sh`: 146 shell assertions and 8 Node tests passed. `git diff --check`: passed. These are local results; GitHub execution is verified after pushing.
