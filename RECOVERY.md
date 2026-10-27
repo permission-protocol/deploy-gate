@@ -1,8 +1,9 @@
-# Stopped deployment recovery (local, unreleased changes)
+# Stopped deployment recovery (unreleased changes)
 
 This version adds a durable coordinator and exact-attempt redemption read-back.
-It has not been pushed or released. The `v2` examples below apply only after a
-reviewed release contains these changes; pin a reviewed release commit in use.
+These changes are proposed and have not been released. The `v2` examples below
+apply only after a reviewed release contains these changes; pin a reviewed
+release commit in use.
 
 ## What recovers
 

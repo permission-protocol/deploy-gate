@@ -4,10 +4,10 @@ Date: 2026-10-27
 Branch: codex/durable-deployment-recovery
 
 ## Objective
-Recover transient approval failures after the original workflow stops, preserving required human signatures, receipt expiry, exact scope and single redemption. Local changes only; no push, PR, tag or release.
+Recover transient approval failures after the original workflow stops, preserving required human signatures, receipt expiry, exact scope and single redemption. Initially implemented locally. The user now authorizes draft PR publication; no merge, tag or release is part of this request.
 
 ## Scope and dependencies
-Based on origin/main 214e1de (v2.4.0). Existing open PRs #47 and #48 also touch action.yml/docs/tests; their overlap must be checked again before future publication. Server-side exact-attempt reconciliation is implemented in the app's local codex/durable-deployment-recovery branch. Older servers fail closed if that read-back is unavailable.
+Based on origin/main 214e1de (v2.4.0). Existing open PRs #47 and #48 also touch action.yml/docs/tests; their diffs were rechecked before publication; coordinate their eventual merges with this Action change. Server-side exact-attempt reconciliation is implemented in the companion app's codex/durable-deployment-recovery branch. Older servers fail closed if that read-back is unavailable.
 
 ## Changes
 - Persist confirmed read-only timeout metadata and provider retry deadlines as immutable run-attempt artifacts.
@@ -24,3 +24,7 @@ Based on origin/main 214e1de (v2.4.0). Existing open PRs #47 and #48 also touch 
 
 ## Impact and risks
 No approval bypass, TTL extension, secret access or new PP credential privileges. The recovery workflow needs only its own repository's ephemeral GITHUB_TOKEN with Actions write and Contents read. It cannot sign or deploy independently. Cancellation, missing evidence, multiple jobs/gates, started provider submission, records older than 28 days and journaled requests without a newer observed attempt require inspection. GitHub schedule delivery is best effort and its rerun API has no atomic conditional or idempotency key. Generic customer recovery is explicitly opt-in; no installed client configuration was changed.
+
+## Publication review
+
+Refreshed origin/main to 214e1de on 2026-10-27; no existing PR uses this branch. Reviewed #47 (carry-forward default), #48 (draft-PR behavior) and #67 (fix.md only). #47/#48 overlap action.yml and documentation/tests; their separate proposals are not folded into this diff. Publication is a draft PR only. The companion server must ship before an Action release; uncertain responses against older servers remain fail-closed.
