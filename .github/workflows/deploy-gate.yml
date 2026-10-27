@@ -15,13 +15,16 @@ jobs:
     name: Permission Protocol
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout trusted published gate client
-        uses: actions/checkout@v4
-        with:
-          repository: permission-protocol/deploy-gate
-          ref: 214e1de8d966e1b757b172f6d0fae41620307e15
-          path: .pp-gate-client
-          persist-credentials: false
+      - name: Download trusted published gate client
+        # Only this public, hash-verified file is needed. The release tree has
+        # an unrelated dangling gitlink that breaks checkout's auth cleanup.
+        shell: bash
+        run: |
+          mkdir .pp-gate-client
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            https://raw.githubusercontent.com/permission-protocol/deploy-gate/214e1de8d966e1b757b172f6d0fae41620307e15/action.yml \
+            --output .pp-gate-client/action.yml
       - name: Normalize released gate packaging
         # Published v2.4.0 exceeds GitHub's inline-expression limit. Use its
         # immutable trusted code, changing only equivalent env interpolation.

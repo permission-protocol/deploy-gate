@@ -28,9 +28,9 @@ test('a long composite shell step has no GitHub expressions to exceed the parser
   assert.match(source, /GH_TOKEN: \$\{\{ github\.token \}\}/);
 });
 test('the approval job uses immutable released code and still requires the same PP gate', () => {
-  assert.ok(workflow.includes(`ref: ${published}`));
-  assert.match(workflow, /repository: permission-protocol\/deploy-gate/);
-  assert.match(workflow, /persist-credentials: false/);
+  assert.ok(workflow.includes(`https://raw.githubusercontent.com/permission-protocol/deploy-gate/${published}/action.yml`));
+  assert.match(workflow, /curl --fail/);
+  assert.ok(!workflow.includes('actions/checkout'), 'fetch only the verified Action, not the release dangling gitlink');
   assert.match(workflow, /uses: \.\/\.pp-gate-client/);
   assert.match(workflow, /fail-on-missing: 'true'/);
   assert.match(workflow, /fail-mode: 'closed'/);
