@@ -32,6 +32,7 @@ test('the approval job uses immutable released code and still requires the same 
   assert.match(workflow, /curl --fail/);
   assert.ok(!workflow.includes('actions/checkout'), 'fetch only the verified Action, not the release dangling gitlink');
   assert.match(workflow, /uses: \.\/\.pp-gate-client/);
+  assert.ok(workflow.includes('GH_REPO: $' + '{{ github.repository }}'), 'metadata reads must retain the explicit repository without a checkout');
   assert.match(workflow, /fail-on-missing: 'true'/);
   assert.match(workflow, /fail-mode: 'closed'/);
   assert.match(workflow, /capability: 'deploy:main'/);

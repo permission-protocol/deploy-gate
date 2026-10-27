@@ -51,6 +51,9 @@ jobs:
           PY
       - name: Verify with trusted published gate
         uses: ./.pp-gate-client
+        env:
+          # gh pr view otherwise infers the repository from a local checkout.
+          GH_REPO: ${{ github.repository }}
         with:
           pp-api-key: ${{ secrets.PP_API_KEY }}
           pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
