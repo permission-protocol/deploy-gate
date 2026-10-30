@@ -21,6 +21,7 @@ name: Deploy Gate
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 jobs:
@@ -135,6 +136,7 @@ Deploy Gate checks for valid receipt
 - Posts a PR comment with a direct approval link
 - Unblocks the PR instantly after approval
 - Produces a tamper-evident approval receipt
+- Stops draft PRs without reporting approval; marking ready reruns receipt verification (unreleased)
 
 ## Comparison
 
