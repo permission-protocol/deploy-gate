@@ -269,6 +269,51 @@ check "no PP call" "$(no_request)" none
 run_case "pr gate missing receipt, fail-on-missing false" "${PR_CTX[@]}" PP_FAIL_ON_MISSING=false <<<'{"valid": false, "errorCode": "RECEIPT_NOT_FOUND"}'
 check "exit" "$EXIT_CODE" 0
 
+# Carry-forward is refused during the read, before any redemption request.
+carry_redeems() { jq -sc 'map(.redeem)' "$CASE_DIR/requests.jsonl"; }
+CARRIED='{"valid":true,"receiptId":"rcpt_1","decision":"APPROVED","carriedForward":true}'
+NESTED_CARRIED='{"result":{"valid":true,"receipt":{"id":"rcpt_1"},"carriedForward":true}}'
+MASKED_CARRIED='{"valid":true,"receiptId":"rcpt_1","carriedForward":false,"result":{"carriedForward":true}}'
+MALFORMED_CARRIED='{"valid":true,"receiptId":"rcpt_1","carriedForward":"false"}'
+for response in "$CARRIED" "$NESTED_CARRIED" "$MASKED_CARRIED" "$MALFORMED_CARRIED"; do
+  run_case "carried-forward PR receipt rejected before redemption" "${PR_CTX[@]}" PP_REDEEM=true <<<"$response"
+  check "exit" "$EXIT_CODE" 1
+  check "approved" "$(output approved)" false
+  check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+  check "zero redemption requests" "$(carry_redeems)" '[false]'
+
+  PULLS="$MERGED" run_case "carried-forward deploy receipt rejected before redemption" <<<"$response"
+  check "exit" "$EXIT_CODE" 1
+  check "approved" "$(output approved)" false
+  check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+  check "zero redemption requests" "$(carry_redeems)" '[false]'
+done
+
+run_case "legacy carry-forward opt-in cannot bypass refusal" "${PR_CTX[@]}" PP_ALLOW_CARRY_FORWARD=true PP_FAIL_ON_MISSING=false PP_ENVIRONMENT=staging PP_FAIL_MODE=open <<<"$CARRIED"
+check "exit" "$EXIT_CODE" 1
+check "approved" "$(output approved)" false
+check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+check "zero redemption requests" "$(carry_redeems)" '[false]'
+
+PULLS="$MERGED" run_case "fresh receipt with explicit false remains valid" <<<'{"valid":true,"receiptId":"rcpt_1","carriedForward":false,"result":{"carriedForward":false}}'
+check "exit" "$EXIT_CODE" 0
+check "approved" "$(output approved)" true
+check "one redemption request" "$(carry_redeems)" '[false,true]'
+
+sequence=$(jq -cn --argjson carried "$CARRIED" --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,body:$carried}]')
+PULLS="$MERGED" run_case "redemption response cannot newly report carry-forward" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "approved" "$(output approved)" false
+check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+check "never replay redemption" "$(carry_redeems)" '[false,true]'
+
+sequence=$(jq -cn --argjson carried "$CARRIED" '[{http:500,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$carried}]')
+PULLS="$MERGED" run_case "carry-forward after transient recovery never redeems" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "approved" "$(output approved)" false
+check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+check "zero redemption requests" "$(carry_redeems)" '[false,false]'
+
 # --- the PR title rides along, so PP can show it without reading GitHub ------
 utf16() { jq -r '[.prTitle | explode[] | if . > 65535 then 2 else 1 end] | add' "$CASE_DIR/request.json"; }
 

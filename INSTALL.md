@@ -68,6 +68,8 @@ Optional (auto-create request on missing receipt):
           pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
 ```
 
+Carried-forward approvals are rejected before redemption. Each pushed PR head needs a fresh approval for its exact SHA; there is no carry-forward opt-in. This behavior is unreleased until included in a new Action release.
+
 Commit and push.
 
 ---
