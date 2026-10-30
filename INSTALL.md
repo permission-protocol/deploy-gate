@@ -68,16 +68,7 @@ Optional (auto-create request on missing receipt):
           pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
 ```
 
-Optional (explicitly allow PR-level approval carry-forward):
-
-```yaml
-      - uses: permission-protocol/deploy-gate@v2
-        with:
-          pp-api-key: ${{ secrets.PP_API_KEY }}
-          allow-carry-forward: true
-```
-
-By default, carried-forward approvals fail closed so each pushed PR head needs its own valid receipt.
+Carried-forward approvals are rejected before redemption. Each pushed PR head needs a fresh approval for its exact SHA; there is no carry-forward opt-in. This behavior is unreleased until included in a new Action release.
 
 Commit and push.
 
@@ -205,7 +196,7 @@ The gate only holds if this workflow is the only way to deploy:
 - **Gate changes to `.github/workflows/`** at the PR gate, so nobody can delete the deploy gate step without a signature.
 - **Anyone with the provider's dashboard, CLI or token can still deploy around it.** Limit who holds them.
 
-Production approvals expire 15 minutes after they are signed, so merge promptly after approval (GitHub auto-merge does this for you). A deploy that runs after the approval expired fails with `RECEIPT_EXPIRED`. If the gate passed but a later step failed, the approval is already used; re-running fails with `RECEIPT_ALREADY_REDEEMED`.
+Production approvals expire 15 minutes after they are signed, so merge promptly after approval (GitHub auto-merge does this for you). Deploy mode now waits up to 30 minutes when an approval is missing or eligible for renewal, prints the signing link, and resumes automatically after the human signs. `wait-for-approval: false` returns these failures immediately. Temporary verification errors are retried using non-redeeming reads; denials, invalid scope/signatures, revocations and unavailable tenant keys remain terminal. If the gate passed but a later step failed, the approval is already used; re-running fails with `RECEIPT_ALREADY_REDEEMED`. A lost final redemption response is never replayed. Read-back can recover only the exact still-valid consumed attempt after current policy and signer checks; unresolved results require inspection. For proposed, unreleased stopped-workflow recovery setup, see [RECOVERY.md](RECOVERY.md).
 
 ---
 

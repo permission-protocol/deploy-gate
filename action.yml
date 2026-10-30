@@ -1,4 +1,4 @@
-# Version: v2.3.0
+# Version: v2.4.0
 name: 'Deploy Gate'
 description: 'Block AI agents from production deploys without a human-signed Ed25519 receipt. Fails closed by default.'
 author: 'Permission Protocol'
@@ -35,16 +35,16 @@ inputs:
     description: 'Redeem receipt on verify. Defaults to false in pr mode. Deploy mode always redeems; setting false there is an error.'
     required: false
     default: ''
-  allow-carry-forward:
-    description: 'Allow a prior PR-level approval to pass after a PR head changes. Defaults to false so each head SHA needs an explicit receipt.'
-    required: false
-    default: 'false'
   protected-paths:
     description: 'Regex pattern for protected paths used for risk assessment metadata (not gating)'
     required: false
     default: '^(deploy/|\.github/workflows/)'
   fail-on-missing:
     description: 'Fail if no receipt exists'
+    required: false
+    default: 'true'
+  wait-for-approval:
+    description: 'In deploy mode, wait up to 30 minutes for a human approval or renewal; transient verification errors are retried in all modes'
     required: false
     default: 'true'
   fail-open-timeout:
@@ -95,6 +95,12 @@ outputs:
   pr-head-sha:
     description: 'The approved head SHA that was checked'
     value: ${{ steps.verify.outputs.pr-head-sha }}
+  recovery-safe:
+    description: 'Only a read-only deployment wait ended; no final redemption was attempted'
+    value: ${{ steps.verify.outputs.recovery-safe }}
+  recovery-reason:
+    description: 'Typed reason for a recoverable stopped wait'
+    value: ${{ steps.verify.outputs.recovery-reason }}
 
 runs:
   using: 'composite'
@@ -109,8 +115,8 @@ runs:
         PP_ENVIRONMENT: ${{ inputs.environment }}
         PP_CAPABILITY: ${{ inputs.capability }}
         PP_REDEEM: ${{ inputs.redeem }}
-        PP_ALLOW_CARRY_FORWARD: ${{ inputs.allow-carry-forward }}
         PP_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+        PP_WAIT_FOR_APPROVAL: ${{ inputs.wait-for-approval }}
         PP_PROTECTED_PATHS: ${{ inputs.protected-paths }}
         PP_FAIL_OPEN_TIMEOUT: ${{ inputs.fail-open-timeout }}
         PP_FAIL_MODE: ${{ inputs.fail-mode }}
@@ -127,6 +133,9 @@ runs:
         PP_SHA: ${{ github.sha }}
         PP_REF: ${{ github.ref }}
         PP_RUN_ID: ${{ github.run_id }}
+        PP_RUN_ATTEMPT: ${{ github.run_attempt }}
+        PP_JOB_CONTEXT: ${{ github.job }}
+        PP_ACTION_CONTEXT: ${{ github.action }}
         GH_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
@@ -157,10 +166,10 @@ runs:
             body=$(printf "⏳ **Permission Protocol:** Approval required\n[Review & approve →](%s)\n\n%s" "$url" "$marker")
           fi
 
-          local comments_url="https://api.github.com/repos/${{ github.repository }}/issues/${PP_PR_NUMBER}/comments?per_page=100"
+          local comments_url="https://api.github.com/repos/${PP_REPOSITORY}/issues/${PP_PR_NUMBER}/comments?per_page=100"
           local comments_response
           comments_response=$(curl -sS \
-            -H "Authorization: token ${{ github.token }}" \
+            -H "Authorization: token ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "$comments_url" || true)
 
@@ -168,15 +177,15 @@ runs:
           comment_id=$(echo "$comments_response" | jq -r '.[] | select((.body | contains("permission-protocol-comment")) or (.body | contains("**Permission Protocol:**"))) | .id' 2>/dev/null | head -n1 || true)
 
           if [ -n "$comment_id" ]; then
-            curl -sS -X PATCH "https://api.github.com/repos/${{ github.repository }}/issues/comments/${comment_id}" \
-              -H "Authorization: token ${{ github.token }}" \
+            curl -sS -X PATCH "https://api.github.com/repos/${PP_REPOSITORY}/issues/comments/${comment_id}" \
+              -H "Authorization: token ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/json" \
               -d "$(jq -n --arg body "$body" '{body: $body}')" > /dev/null 2>&1 || \
               echo "⚠️ Failed to update PR comment (non-fatal)"
           else
-            curl -sS -X POST "https://api.github.com/repos/${{ github.repository }}/issues/${PP_PR_NUMBER}/comments" \
-              -H "Authorization: token ${{ github.token }}" \
+            curl -sS -X POST "https://api.github.com/repos/${PP_REPOSITORY}/issues/${PP_PR_NUMBER}/comments" \
+              -H "Authorization: token ${GH_TOKEN}" \
               -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/json" \
               -d "$(jq -n --arg body "$body" '{body: $body}')" > /dev/null 2>&1 || \
@@ -250,6 +259,14 @@ runs:
           exit 1
         }
 
+        reject_carried_forward() {
+          # Check both response shapes: false at the top level must not mask
+          # a carried-forward nested result. Non-boolean markers fail closed.
+          if ! printf '%s' "$HTTP_BODY" | jq -e '[.carriedForward, .result.carriedForward] | all(. == null or . == false)' >/dev/null 2>&1; then
+            gate_error "PP_CARRY_FORWARD_DISABLED" "Carried-forward or malformed carry-forward approval cannot authorize this head. Obtain a fresh approval for this exact head SHA."
+          fi
+        }
+
         # ---------------------------------------------------------------
         # Mode. pr gates a pull request; deploy gates shipping a merged PR
         # by redeeming the receipt its signer approved at the PR gate.
@@ -291,11 +308,6 @@ runs:
         REDEEM_JSON=false
         if [ "$PP_MODE_NORMALIZED" = "deploy" ] || [ "${PP_REDEEM}" = "true" ]; then
           REDEEM_JSON=true
-        fi
-
-        PP_ALLOW_CARRY_FORWARD_NORMALIZED=$(echo "${PP_ALLOW_CARRY_FORWARD:-false}" | tr '[:upper:]' '[:lower:]')
-        if [ "$PP_ALLOW_CARRY_FORWARD_NORMALIZED" != "true" ]; then
-          PP_ALLOW_CARRY_FORWARD_NORMALIZED="false"
         fi
 
         FAIL_ON_MISSING_JSON=true
@@ -444,6 +456,15 @@ runs:
         echo "  🔐 PERMISSION PROTOCOL - Deploy Authorization Required"
         echo "═══════════════════════════════════════════════════════════"
 
+        PP_REDEMPTION_ATTEMPT_HASH=''
+        if [ "$REDEEM_JSON" = true ]; then
+          if ! [[ "${PP_RUN_ID:-}" =~ ^[0-9]+$ && "${PP_RUN_ATTEMPT:-}" =~ ^[0-9]+$ ]] || [ -z "${PP_JOB_CONTEXT:-}" ] || [ -z "${PP_ACTION_CONTEXT:-}" ]; then
+            gate_error PP_RECOVERY_CONTEXT_MISSING 'Exact workflow attempt context is required before redemption.'
+          fi
+          REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg run "$PP_RUN_ID" '.redeemRunId = $run')
+          PP_REDEMPTION_ATTEMPT_HASH=$(printf '%s\0%s\0%s\0%s\0%s' "$PP_RUN_ID" "$PP_RUN_ATTEMPT" "$PP_JOB_CONTEXT" "$PP_ACTION_CONTEXT" "$REQUEST_BODY" | sha256sum | cut -d' ' -f1)
+          REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg hash "$PP_REDEMPTION_ATTEMPT_HASH" '.redeemAttemptHash = $hash')
+        fi
         CURL_HEADERS=(
           -H "Content-Type: application/json"
           -H "X-PP-API-Key: ${PP_API_KEY}"
@@ -455,6 +476,88 @@ runs:
           CURL_HEADERS+=( -H "X-PP-Request-Create-Token: ${PP_REQUEST_CREATE_TOKEN}" )
         fi
 
+        # Retry reads, never a potentially consumed redemption. A temporary PP
+        # or provider failure is not an authorization decision (INV-10).
+        READ_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c '.redeem = false')
+        WAIT_SECONDS=300
+        if [ "$PP_MODE_NORMALIZED" = deploy ] && [ "${PP_WAIT_FOR_APPROVAL:-true}" = true ]; then WAIT_SECONDS=1800; fi
+        DEADLINE=$(( $(date +%s) + WAIT_SECONDS ))
+        PRINTED=''
+        while :; do
+          CURL_EXIT=0
+          HTTP_RESPONSE=$(curl -sS -w '\n%{http_code}' --max-time "${PP_FAIL_OPEN_TIMEOUT}" \
+            -X POST "${PP_BASE_URL}/api/v1/receipts/verify" "${CURL_HEADERS[@]}" -d "$READ_BODY") || CURL_EXIT=$?
+          HTTP_BODY=$(printf '%s\n' "$HTTP_RESPONSE" | sed '$d')
+          HTTP_STATUS=$(printf '%s\n' "$HTTP_RESPONSE" | tail -n1)
+          CODE=$(printf '%s' "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null) || CODE=''
+          RETRY=false
+          SIGNING=''
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            # Never trust a partially transferred success body.
+            RETRY=true
+            HTTP_BODY=''
+          elif [ "$HTTP_STATUS" = 200 ] && [ -z "$CODE" ] && [ "$(printf '%s' "$HTTP_BODY" | jq -r '(.valid == true) or (.result.valid == true)' 2>/dev/null)" = true ]; then
+            # Refuse before the selected receipt can ever be consumed.
+            reject_carried_forward
+            break
+          else
+            case "$CODE $HTTP_STATUS" in
+              'INTERNAL_ERROR 500'|'RATE_LIMITED 429'|'POLICY_UNAVAILABLE 503'|' 429'|' 500'|' 502'|' 503'|' 504') RETRY=true ;;
+              'POLICY_AUTHORIZATION_REQUIRED 409')
+                POLICY=$(printf '%s' "$HTTP_BODY" | jq -r '.policyRead.code // empty')
+                case "$POLICY" in
+                  GITHUB_RATE_LIMITED|GITHUB_TIMEOUT|GITHUB_NETWORK_ERROR|GITHUB_TOKEN_SERVICE_UNAVAILABLE) RETRY=true ;;
+                  GITHUB_REPO_UNREADABLE)
+                    if [[ "$(printf '%s' "$HTTP_BODY" | jq -r '.policyRead.githubStatus // empty')" =~ ^5[0-9][0-9]$ ]]; then RETRY=true; fi ;;
+                  POLICY_APPROVAL_PENDING) SIGNING=yes ;;
+                esac ;;
+              'RECEIPT_NOT_FOUND 404'|'PP_NO_RECEIPT 404'|'PP_APPROVAL_REQUIRED 409'|'WORKSPACE_SIGNATURE_REQUIRED 409') SIGNING=yes ;;
+              'RECEIPT_EXPIRED 410')
+                if [ "$(printf '%s' "$HTTP_BODY" | jq -r '.reapproval.autoRenewEligible == true')" = true ]; then SIGNING=renew
+                elif [ "$(printf '%s' "$HTTP_BODY" | jq -r '.reapproval.reason // empty')" = 'Receipt has not expired' ]; then RETRY=true; fi ;;
+            esac
+          fi
+          if [ "$SIGNING" != '' ] && [ "$PP_MODE_NORMALIZED" = deploy ] && [ "${PP_WAIT_FOR_APPROVAL:-true}" = true ]; then
+            POINTER=$(printf '%s' "$HTTP_BODY" | jq -r '.renewalUrl // .reapproval.approvalUrl // .approvalUrl // empty')
+            if [ "$SIGNING" = renew ]; then POINTER="${POINTER%/renew}/renew"; fi
+            if [[ "$POINTER" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?/approve/[a-zA-Z0-9_-]+(/renew)?$ ]]; then
+              RETRY=true
+              if [ "$POINTER" != "$PRINTED" ]; then
+                echo "Waiting for human approval: ${POINTER}. This run resumes automatically."
+                if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                  printf '### Deployment is waiting for your signature\n\n[Review and sign](%s). This run resumes automatically.\n' "$POINTER" >> "$GITHUB_STEP_SUMMARY"
+                fi
+                PRINTED="$POINTER"
+              fi
+            fi
+          fi
+          if [ "$RETRY" != true ]; then break; fi
+          if (( $(date +%s) + 15 >= DEADLINE )); then
+            if [ "$PP_MODE_NORMALIZED" = deploy ] && [ "$REDEEM_JSON" = true ]; then
+              set_output recovery-safe true
+              if [ -n "$PRINTED" ]; then set_output recovery-reason approval_wait; else set_output recovery-reason provider_unavailable; fi
+              RECOVERY_RETRY_AT=$(printf '%s' "$HTTP_BODY" | jq -r '.policyRead.retryAt // .error.meta.readIssue.retryAt // .retryAt // empty' 2>/dev/null || true)
+              if [[ "$RECOVERY_RETRY_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{3})?Z$ ]]; then set_output recovery-retry-at "$RECOVERY_RETRY_AT"; fi
+            fi
+            if [ -n "$PRINTED" ]; then
+              gate_error "PP_APPROVAL_TIMEOUT" "Approval wait ended after ${WAIT_SECONDS}s. Nothing was redeemed or deployed. Review and sign: ${PRINTED}. Retry the newest deployment with current authorization."
+            fi
+            handle_unavailable "Verification wait ended after ${WAIT_SECONDS}s. Nothing was redeemed or deployed. ${PRINTED:+Review and sign: $PRINTED. }Retry the newest deployment once PP is available and authorization is current."
+          fi
+          if [ -z "$SIGNING" ]; then echo "Permission Protocol verification is temporarily unavailable; retrying without redeeming."; fi
+          sleep 15
+        done
+
+        # The successful read is sufficient in PR mode. Deploy mode submits
+        # exactly one redemption; a lost/500 response must never replay it.
+        REDEMPTION_SENT=false
+        if [ "$REDEEM_JSON" = true ] && [ "$HTTP_STATUS" = 200 ] && [ -z "$CODE" ] && [ "$(printf '%s' "$HTTP_BODY" | jq -r '(.valid == true) or (.result.valid == true)' 2>/dev/null)" = true ]; then
+        REDEMPTION_SENT=true
+        SELECTED_RECEIPT_ID=$(printf '%s' "$HTTP_BODY" | jq -r '.result.receipt.id // .receipt.id // .receiptId // .result.receiptId // empty')
+        if [ -z "$SELECTED_RECEIPT_ID" ]; then gate_error PP_RECEIPT_ID_MISSING 'The exact receipt could not be established before redemption.'; fi
+        REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg id "$SELECTED_RECEIPT_ID" '.receiptId = $id | del(.redeemAttemptHash)')
+        PP_REDEMPTION_ATTEMPT_HASH=$(printf '%s\0%s\0%s\0%s\0%s' "$PP_RUN_ID" "$PP_RUN_ATTEMPT" "$PP_JOB_CONTEXT" "$PP_ACTION_CONTEXT" "$REQUEST_BODY" | sha256sum | cut -d' ' -f1)
+        REQUEST_BODY=$(printf '%s' "$REQUEST_BODY" | jq -c --arg hash "$PP_REDEMPTION_ATTEMPT_HASH" '.redeemAttemptHash = $hash')
         set +e
         HTTP_RESPONSE=$(curl -sS -w "\n%{http_code}" \
           --max-time "${PP_FAIL_OPEN_TIMEOUT}" \
@@ -463,24 +566,39 @@ runs:
           -d "${REQUEST_BODY}")
         CURL_EXIT=$?
         set -e
+        fi
 
+        FINAL_STATUS=$(printf '%s\n' "$HTTP_RESPONSE" | tail -n1)
+        FINAL_BODY=$(printf '%s\n' "$HTTP_RESPONSE" | sed '$d')
+        if [ "$REDEMPTION_SENT" = true ] && { [ "$CURL_EXIT" -ne 0 ] || [[ "$FINAL_STATUS" =~ ^5[0-9][0-9]$ ]] || ! printf '%s' "$FINAL_BODY" | jq -e '(.valid | type == "boolean") or (.success | type == "boolean") or (.result.valid | type == "boolean")' >/dev/null 2>&1; }; then
+          PP_REDEEM=true
+          CHECK_RUN_HEADERS=()
+          source "${GITHUB_ACTION_PATH}/reconcile-redemption.sh"
+          if pp_reconcile_redemption; then CURL_EXIT=0; fi
+        fi
         if [ "$CURL_EXIT" -ne 0 ]; then
+          if [ "$REDEEM_JSON" = true ]; then
+            gate_error "PP_REDEMPTION_UNCERTAIN" "Redemption response was lost (curl exit ${CURL_EXIT}). No response is trusted or replayed; inspect this attempt before retrying."
+          fi
           handle_unavailable "API request failed (curl exit ${CURL_EXIT})"
         fi
 
         HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
         HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
+        if [ "$REDEEM_JSON" = true ] && [[ "$HTTP_STATUS" =~ ^5[0-9][0-9]$ ]]; then
+          gate_error "PP_REDEMPTION_UNCERTAIN" "Redemption returned HTTP ${HTTP_STATUS}. It may already have consumed the receipt; inspect this attempt before retrying. No redemption is replayed."
+        fi
 
         if [ -z "$HTTP_BODY" ] || [ "$HTTP_STATUS" = "000" ]; then
           handle_unavailable "Empty response from Permission Protocol"
         fi
 
         VALID=$(echo "$HTTP_BODY" | jq -r '.valid // .result.valid // false' 2>/dev/null || echo "false")
-        CARRIED_FORWARD=$(echo "$HTTP_BODY" | jq -r '.carriedForward // .result.carriedForward // false' 2>/dev/null || echo "false")
         RECEIPT_ID=$(echo "$HTTP_BODY" | jq -r '.receiptId // .receipt.id // .result.receiptId // .result.receipt.id // empty' 2>/dev/null || echo "")
         DECISION=$(echo "$HTTP_BODY" | jq -r '.decision // .result.decision // empty' 2>/dev/null || echo "")
         ERROR_CODE=$(echo "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null || echo "")
         ERROR_MESSAGE=$(echo "$HTTP_BODY" | jq -r '.errorMessage // .result.errorMessage // .error.message // empty' 2>/dev/null || echo "")
+        if [ "$HTTP_STATUS" != 200 ] || [ -n "$ERROR_CODE" ]; then VALID=false; fi
         REQUEST_ID=$(echo "$HTTP_BODY" | jq -r '.requestId // .result.requestId // empty' 2>/dev/null || echo "")
         APPROVAL_URL=$(echo "$HTTP_BODY" | jq -r '.approvalUrl // .result.approvalUrl // empty' 2>/dev/null || echo "")
         SKIP_REASON=$(echo "$HTTP_BODY" | jq -r '.creationSkippedReason // .result.creationSkippedReason // empty' 2>/dev/null || echo "")
@@ -502,11 +620,9 @@ runs:
           REVIEW_URL="$APPROVAL_URL"
         fi
 
-        if [ "$VALID" = "true" ] && [ "$CARRIED_FORWARD" = "true" ] && [ "$PP_ALLOW_CARRY_FORWARD_NORMALIZED" != "true" ]; then
-          VALID=false
-          ERROR_CODE="PP_CARRY_FORWARD_DISABLED"
-          ERROR_MESSAGE="Receipt was carried forward from a prior PR approval. Obtain a fresh approval for this exact head SHA or opt into allow-carry-forward."
-        fi
+        # Recheck the final redemption/reconciliation response as well; a
+        # changed response must never turn a carried-forward receipt green.
+        if [ "$VALID" = "true" ]; then reject_carried_forward; fi
 
         set_output "approved" "$VALID"
         set_output "receipt-id" "$RECEIPT_ID"
@@ -518,11 +634,7 @@ runs:
 
         if [ "$VALID" = "true" ]; then
           echo ""
-          if [ "$CARRIED_FORWARD" = "true" ]; then
-            echo "  ✅ APPROVED — Carried forward from PR-level approval"
-          else
-            echo "  ✅ APPROVED — Receipt verified"
-          fi
+          echo "  ✅ APPROVED — Receipt verified"
           if [ -n "$RECEIPT_ID" ]; then
             echo "  📋 Receipt: ${RECEIPT_ID}"
           fi
@@ -608,18 +720,6 @@ runs:
             fi
             exit 1
             ;;
-          "PP_CARRY_FORWARD_DISABLED")
-            echo "❌ FAIL: Carried-forward receipt rejected"
-            echo "$ERROR_MESSAGE"
-            echo "Details: repo=${REPO} pr=#${PP_PR_NUMBER} sha=${PP_PR_HEAD_SHA:0:10}"
-            if [ -n "$REQUEST_ID" ]; then
-              echo "Request: ${REQUEST_ID}"
-            fi
-            if [ -n "$REVIEW_URL" ]; then
-              upsert_pr_comment "pending" "$REVIEW_URL"
-            fi
-            exit 1
-            ;;
           "SIGNATURE_INVALID"|"KEY_REVOKED")
             echo "❌ FAIL: Signature verification failed (${ERROR_CODE})"
             if [ -n "$ERROR_MESSAGE" ]; then
@@ -653,3 +753,21 @@ runs:
             exit 1
             ;;
         esac
+    - name: Record the stopped read-only wait
+      id: recovery-record
+      if: failure() && steps.verify.outputs.recovery-safe == 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      shell: bash
+      env:
+        PP_RECOVERY_SAFE: ${{ steps.verify.outputs.recovery-safe }}
+        PP_RECOVERY_REASON: ${{ steps.verify.outputs.recovery-reason }}
+        PP_RECOVERY_RETRY_AT: ${{ steps.verify.outputs.recovery-retry-at }}
+        PP_RECOVERY_WORKFLOW_REF: ${{ github.workflow_ref }}
+      run: node "$GITHUB_ACTION_PATH/scripts/deployment-recovery.mjs" record
+    - name: Persist the stopped read-only wait
+      if: failure() && steps.recovery-record.outcome == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: pp-deployment-recovery-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.recovery-record.outputs.safe == 'true' && 'retry' || 'inspection' }}
+        path: .pp-recovery/record/recovery.json
+        retention-days: 30
+        if-no-files-found: error

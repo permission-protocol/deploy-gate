@@ -16,6 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 SCRIPT="$WORK/verify.sh"
 awk '
   /^      run: \|$/ { inrun = 1; next }
+  inrun && /^    - / { exit }
   inrun { sub(/^        /, ""); print }
 ' "$ROOT/action.yml" > "$SCRIPT"
 if ! grep -q 'receipts/verify' "$SCRIPT"; then
@@ -52,13 +53,34 @@ cat > "$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >> "$STUB_DIR/curl.log"
 while [ $# -gt 0 ]; do
-  if [ "$1" = "-d" ]; then printf '%s' "$2" > "$STUB_DIR/request.json"; fi
+  if [ "$1" = "-d" ]; then printf '%s' "$2" > "$STUB_DIR/request.json"; printf '%s' "$2" | jq -c . >> "$STUB_DIR/requests.jsonl"; fi
   shift
 done
+if [ -n "${STUB_SEQUENCE:-}" ]; then
+  n=$(( $(cat "$STUB_DIR/call-count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_DIR/call-count"
+  if [ "${STUB_RECOVER_REDEMPTION:-}" = 1 ] && [ "$n" -gt 2 ]; then
+    jq -cn --arg hash "$(jq -r .redeemAttemptHash "$STUB_DIR/request.json")" --arg id "$(jq -r .receiptId "$STUB_DIR/request.json")" \
+      '{success:true,result:{valid:true,receipt:{id:$id,decision:"APPROVED",redeemedAt:"2026-10-27T16:00:00Z",redeemedRunId:"4242",redeemAttemptHash:$hash,demo:false}}}'
+    printf '\n200'; exit 0
+  fi
+  reply=$(printf '%s' "$STUB_SEQUENCE" | jq -c --argjson i "$((n - 1))" '.[$i] // .[-1]')
+  printf '%s' "$reply" | jq -r '.body | if type == "string" then . else tojson end'
+  printf '\n%s' "$(printf '%s' "$reply" | jq -r '.http')"
+  exit "$(printf '%s' "$reply" | jq -r '.exit // 0')"
+fi
 cat "$STUB_DIR/response.json"
 printf '\n%s' "${STUB_STATUS:-200}"
 STUB
 chmod +x "$WORK/bin/gh" "$WORK/bin/curl"
+cat > "$WORK/bin/date" <<'STUB'
+#!/usr/bin/env bash
+cat "$STUB_DIR/clock" 2>/dev/null || echo 0
+STUB
+cat > "$WORK/bin/sleep" <<'STUB'
+#!/usr/bin/env bash
+echo $(( $(cat "$STUB_DIR/clock" 2>/dev/null || echo 0) + ${STUB_TICK:-15} )) > "$STUB_DIR/clock"
+STUB
+chmod +x "$WORK/bin/date" "$WORK/bin/sleep"
 
 PASS=0
 FAIL=0
@@ -79,12 +101,13 @@ run_case() {
     export PATH="$WORK/bin:$PATH" STUB_DIR="$CASE_DIR" GITHUB_OUTPUT="$CASE_DIR/outputs"
     export PP_BASE_URL=https://pp.test PP_API_KEY=pp_live_test PP_REQUEST_CREATE_TOKEN=
     export PP_ENVIRONMENT=production PP_CAPABILITY=deploy:production
-    export PP_ALLOW_CARRY_FORWARD= PP_REDEEM= PP_FAIL_ON_MISSING=true PP_PROTECTED_PATHS='^(deploy/|\.github/workflows/)'
+    export PP_REDEEM= PP_FAIL_ON_MISSING=true PP_PROTECTED_PATHS='^(deploy/|\.github/workflows/)'
     export PP_FAIL_OPEN_TIMEOUT=30 PP_FAIL_MODE=closed PP_PRODUCTION_ENVIRONMENTS=production,prod,live
     export PP_POST_COMMENT=false PP_REPOSITORY=Acme/Web
     export PP_PR_NUMBER= PP_PR_HEAD_SHA= PP_PR_BASE_SHA= PP_PR_TITLE=
     export PP_MODE=auto PP_EVENT_NAME=push PP_SHA=mergesha0000000000 PP_REF=refs/heads/main
-    export PP_RUN_ID=4242 GH_TOKEN=ghs_test
+    export PP_RUN_ID=4242 PP_RUN_ATTEMPT=1 PP_JOB_CONTEXT=deploy PP_ACTION_CONTEXT=verify GH_TOKEN=ghs_test
+    export GITHUB_ACTION_PATH="$ROOT"
     for assignment in "$@"; do export "$assignment"; done
     bash "$SCRIPT"
   ) > "$CASE_DIR/stdout" 2>&1
@@ -206,7 +229,7 @@ PULLS="$MERGED" run_case "receipt expired" <<<'{"valid": false, "errorCode": "RE
 check "exit" "$EXIT_CODE" 1
 check "error" "$(output error-code)" RECEIPT_EXPIRED
 
-PULLS="$MERGED" run_case "expired, signer can renew" <<<'{"result": {"valid": false, "errorCode": "RECEIPT_EXPIRED"}, "reapproval": {"autoRenewEligible": true, "requestId": "req_3", "approvalUrl": "https://pp.test/approve/req_3"}}'
+PULLS="$MERGED" run_case "expired, signer can renew, opt-out wait" PP_WAIT_FOR_APPROVAL=false <<<'{"result": {"valid": false, "errorCode": "RECEIPT_EXPIRED"}, "reapproval": {"autoRenewEligible": true, "requestId": "req_3", "approvalUrl": "https://pp.test/approve/req_3"}}'
 check "exit" "$EXIT_CODE" 1
 check "error" "$(output error-code)" RECEIPT_EXPIRED
 check "renew link" "$(output approval-url)" https://pp.test/approve/req_3
@@ -246,30 +269,50 @@ check "no PP call" "$(no_request)" none
 run_case "pr gate missing receipt, fail-on-missing false" "${PR_CTX[@]}" PP_FAIL_ON_MISSING=false <<<'{"valid": false, "errorCode": "RECEIPT_NOT_FOUND"}'
 check "exit" "$EXIT_CODE" 0
 
-# Carry-forward receipts require explicit opt-in in either mode.
+# Carry-forward is refused during the read, before any redemption request.
+carry_redeems() { jq -sc 'map(.redeem)' "$CASE_DIR/requests.jsonl"; }
 CARRIED='{"valid":true,"receiptId":"rcpt_1","decision":"APPROVED","carriedForward":true}'
-run_case "carried-forward PR receipt rejected by default" "${PR_CTX[@]}" <<<"$CARRIED"
+NESTED_CARRIED='{"result":{"valid":true,"receipt":{"id":"rcpt_1"},"carriedForward":true}}'
+MASKED_CARRIED='{"valid":true,"receiptId":"rcpt_1","carriedForward":false,"result":{"carriedForward":true}}'
+MALFORMED_CARRIED='{"valid":true,"receiptId":"rcpt_1","carriedForward":"false"}'
+for response in "$CARRIED" "$NESTED_CARRIED" "$MASKED_CARRIED" "$MALFORMED_CARRIED"; do
+  run_case "carried-forward PR receipt rejected before redemption" "${PR_CTX[@]}" PP_REDEEM=true <<<"$response"
+  check "exit" "$EXIT_CODE" 1
+  check "approved" "$(output approved)" false
+  check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+  check "zero redemption requests" "$(carry_redeems)" '[false]'
+
+  PULLS="$MERGED" run_case "carried-forward deploy receipt rejected before redemption" <<<"$response"
+  check "exit" "$EXIT_CODE" 1
+  check "approved" "$(output approved)" false
+  check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+  check "zero redemption requests" "$(carry_redeems)" '[false]'
+done
+
+run_case "legacy carry-forward opt-in cannot bypass refusal" "${PR_CTX[@]}" PP_ALLOW_CARRY_FORWARD=true PP_FAIL_ON_MISSING=false PP_ENVIRONMENT=staging PP_FAIL_MODE=open <<<"$CARRIED"
 check "exit" "$EXIT_CODE" 1
 check "approved" "$(output approved)" false
 check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+check "zero redemption requests" "$(carry_redeems)" '[false]'
 
-run_case "carried-forward PR receipt explicitly allowed" "${PR_CTX[@]}" PP_ALLOW_CARRY_FORWARD=TrUe <<<"$CARRIED"
+PULLS="$MERGED" run_case "fresh receipt with explicit false remains valid" <<<'{"valid":true,"receiptId":"rcpt_1","carriedForward":false,"result":{"carriedForward":false}}'
 check "exit" "$EXIT_CODE" 0
 check "approved" "$(output approved)" true
+check "one redemption request" "$(carry_redeems)" '[false,true]'
 
-run_case "invalid carry-forward opt-in stays closed" "${PR_CTX[@]}" PP_ALLOW_CARRY_FORWARD=yes <<<"$CARRIED"
+sequence=$(jq -cn --argjson carried "$CARRIED" --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,body:$carried}]')
+PULLS="$MERGED" run_case "redemption response cannot newly report carry-forward" STUB_SEQUENCE="$sequence" <<<''
 check "exit" "$EXIT_CODE" 1
 check "approved" "$(output approved)" false
-
-PULLS="$MERGED" run_case "carried-forward deploy receipt rejected by default" <<<"$CARRIED"
-check "exit" "$EXIT_CODE" 1
 check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
-check "redeem" "$(request .redeem)" true
+check "never replay redemption" "$(carry_redeems)" '[false,true]'
 
-PULLS="$MERGED" run_case "carried-forward deploy receipt explicitly allowed" PP_ALLOW_CARRY_FORWARD=true <<<"$CARRIED"
-check "exit" "$EXIT_CODE" 0
-check "approved" "$(output approved)" true
-check "redeem" "$(request .redeem)" true
+sequence=$(jq -cn --argjson carried "$CARRIED" '[{http:500,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$carried}]')
+PULLS="$MERGED" run_case "carry-forward after transient recovery never redeems" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "approved" "$(output approved)" false
+check "error" "$(output error-code)" PP_CARRY_FORWARD_DISABLED
+check "zero redemption requests" "$(carry_redeems)" '[false,false]'
 
 # --- the PR title rides along, so PP can show it without reading GitHub ------
 utf16() { jq -r '[.prTitle | explode[] | if . > 65535 then 2 else 1 end] | add' "$CASE_DIR/request.json"; }
@@ -289,6 +332,101 @@ run_case "emoji PR title stays within 300 UTF-16 units" "${PR_CTX[@]}" "PP_PR_TI
 check "code points" "$(request '.prTitle | length')" 150
 check "utf-16 units" "$(utf16)" 300
 
+# --- transient recovery never retries a redemption --------------------------
+sequence_redeems() { jq -sc 'map(.redeem)' "$CASE_DIR/requests.jsonl"; }
+for code in INTERNAL_ERROR RATE_LIMITED POLICY_UNAVAILABLE; do
+  case "$code" in INTERNAL_ERROR) status=500 ;; RATE_LIMITED) status=429 ;; *) status=503 ;; esac
+  sequence=$(jq -cn --arg code "$code" --argjson status "$status" --argjson valid "$VALID" '[{http:$status,body:{error:{code:$code}}},{http:200,body:$valid},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "recovers from $code" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 0
+  check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+  check "exact artifact preserved" "$(jq -sc 'map(.scope) | unique | length' "$CASE_DIR/requests.jsonl")" 1
+done
+
+for status in 429 500 502 503 504; do
+  sequence=$(jq -cn --argjson status "$status" --argjson valid "$VALID" '[{http:$status,body:"<html>Unavailable</html>"},{http:200,body:$valid},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "gateway $status recovers" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 0
+  check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+done
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid,exit:18},{http:200,body:$valid},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "partial success is discarded" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+
+for code in RECEIPT_DENIED RECEIPT_REVOKED SIGNATURE_INVALID TENANT_KEY_MISSING POLICY_CHANGED; do
+  sequence=$(jq -cn --arg code "$code" --argjson valid "$VALID" '[{http:503,body:{error:{code:$code}}},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "never retries refusal $code" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 1
+  check "no redemption" "$(sequence_redeems)" '[false]'
+done
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:500,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "ambiguous redemption is never replayed" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "uncertain redemption" "$(output error-code)" PP_REDEMPTION_UNCERTAIN
+check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | length')" 1
+check "recovery reads only" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
+
+sequence='[{"http":500,"body":{"error":{"code":"INTERNAL_ERROR"}}}]'
+PULLS="$MERGED" run_case "outage ends closed at deadline" STUB_SEQUENCE="$sequence" STUB_TICK=1800 <<<''
+check "exit" "$EXIT_CODE" 1
+check "no redemption" "$(sequence_redeems)" '[false,false]'
+check "recovery message" "$(grep -c 'Nothing was redeemed or deployed' "$CASE_DIR/stdout")" 1
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:410,body:{result:{valid:false,errorCode:"RECEIPT_EXPIRED"},reapproval:{autoRenewEligible:true,approvalUrl:"https://pp.test/approve/req_3"}}},{http:200,body:$valid},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "waits for human renewal and resumes" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+check "renewal link" "$(grep -c 'https://pp.test/approve/req_3/renew' "$CASE_DIR/stdout")" 1
+
+for policy in GITHUB_RATE_LIMITED GITHUB_TIMEOUT GITHUB_NETWORK_ERROR GITHUB_TOKEN_SERVICE_UNAVAILABLE; do
+  sequence=$(jq -cn --arg policy "$policy" --argjson valid "$VALID" '[{http:409,body:{errorCode:"POLICY_AUTHORIZATION_REQUIRED",policyRead:{code:$policy}}},{http:200,body:$valid},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "recovers policy read $policy" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 0
+  check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+done
+
+for status in 401 403; do
+  sequence=$(jq -cn --argjson status "$status" --argjson valid "$VALID" '[{http:$status,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$valid}]')
+  PULLS="$MERGED" run_case "authentication refusal $status is terminal" STUB_SEQUENCE="$sequence" <<<''
+  check "exit" "$EXIT_CODE" 1
+  check "no redemption" "$(sequence_redeems)" '[false]'
+done
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:500,body:{error:{code:"INTERNAL_ERROR"}}},{http:200,body:$valid}]')
+run_case "PR read recovers without redemption" "${PR_CTX[@]}" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "reads only" "$(sequence_redeems)" '[false,false]'
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,body:$valid,exit:18},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "truncated redemption success is never accepted or replayed" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 1
+check "uncertain redemption" "$(output error-code)" PP_REDEMPTION_UNCERTAIN
+check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | length')" 1
+check "recovery reads only" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
+
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:410,body:{result:{valid:false,errorCode:"RECEIPT_EXPIRED"},reapproval:{autoRenewEligible:false,reason:"Receipt has not expired"}}},{http:200,body:$valid},{http:200,body:$valid}]')
+PULLS="$MERGED" run_case "renewal concurrent with read recovers" STUB_SEQUENCE="$sequence" <<<''
+check "exit" "$EXIT_CODE" 0
+check "one redemption" "$(sequence_redeems)" '[false,false,true]'
+
+sequence='[{"http":404,"body":{"valid":false,"errorCode":"RECEIPT_NOT_FOUND","approvalUrl":"https://pp.test/approve/req_3"}}]'
+PULLS="$MERGED" run_case "missing human approval never becomes a non-production fail-open" STUB_SEQUENCE="$sequence" STUB_TICK=1800 PP_ENVIRONMENT=staging PP_FAIL_MODE=open <<<''
+check "exit" "$EXIT_CODE" 1
+check "approval timed out" "$(output error-code)" PP_APPROVAL_TIMEOUT
+check "not approved" "$(output approved)" false
+check "no redemption" "$(sequence_redeems)" '[false,false]'
+
 echo ""
+sequence=$(jq -cn --argjson valid "$VALID" '[{http:200,body:$valid},{http:200,body:$valid,exit:18}]')
+PULLS="$MERGED" run_case "lost final response recovers the exact recorded attempt by read" STUB_SEQUENCE="$sequence" STUB_RECOVER_REDEMPTION=1 <<<''
+check "exit" "$EXIT_CODE" 0
+check "approved" "$(output approved)" true
+check "one redemption" "$(sequence_redeems | jq '[.[] | select(. == true)] | length')" 1
+check "recovered through reads" "$(sequence_redeems | jq '.[2:] | all(. == false)')" true
+
 echo "${PASS} passed, ${FAIL} failed"
+node --test "$ROOT/test/recovery.test.mjs" "$ROOT/test/permission-gate.test.mjs" || exit 1
 [ "$FAIL" -eq 0 ]
