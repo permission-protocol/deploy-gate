@@ -259,6 +259,14 @@ runs:
           exit 1
         }
 
+        reject_carried_forward() {
+          # Check both response shapes: false at the top level must not mask
+          # a carried-forward nested result. Non-boolean markers fail closed.
+          if ! printf '%s' "$HTTP_BODY" | jq -e '[.carriedForward, .result.carriedForward] | all(. == null or . == false)' >/dev/null 2>&1; then
+            gate_error "PP_CARRY_FORWARD_DISABLED" "Carried-forward or malformed carry-forward approval cannot authorize this head. Obtain a fresh approval for this exact head SHA."
+          fi
+        }
+
         # ---------------------------------------------------------------
         # Mode. pr gates a pull request; deploy gates shipping a merged PR
         # by redeeming the receipt its signer approved at the PR gate.
@@ -489,6 +497,8 @@ runs:
             RETRY=true
             HTTP_BODY=''
           elif [ "$HTTP_STATUS" = 200 ] && [ -z "$CODE" ] && [ "$(printf '%s' "$HTTP_BODY" | jq -r '(.valid == true) or (.result.valid == true)' 2>/dev/null)" = true ]; then
+            # Refuse before the selected receipt can ever be consumed.
+            reject_carried_forward
             break
           else
             case "$CODE $HTTP_STATUS" in
@@ -584,7 +594,6 @@ runs:
         fi
 
         VALID=$(echo "$HTTP_BODY" | jq -r '.valid // .result.valid // false' 2>/dev/null || echo "false")
-        CARRIED_FORWARD=$(echo "$HTTP_BODY" | jq -r '.carriedForward // .result.carriedForward // false' 2>/dev/null || echo "false")
         RECEIPT_ID=$(echo "$HTTP_BODY" | jq -r '.receiptId // .receipt.id // .result.receiptId // .result.receipt.id // empty' 2>/dev/null || echo "")
         DECISION=$(echo "$HTTP_BODY" | jq -r '.decision // .result.decision // empty' 2>/dev/null || echo "")
         ERROR_CODE=$(echo "$HTTP_BODY" | jq -r '.errorCode // .result.errorCode // .error.code // empty' 2>/dev/null || echo "")
@@ -611,6 +620,10 @@ runs:
           REVIEW_URL="$APPROVAL_URL"
         fi
 
+        # Recheck the final redemption/reconciliation response as well; a
+        # changed response must never turn a carried-forward receipt green.
+        if [ "$VALID" = "true" ]; then reject_carried_forward; fi
+
         set_output "approved" "$VALID"
         set_output "receipt-id" "$RECEIPT_ID"
         set_output "decision" "$DECISION"
@@ -621,11 +634,7 @@ runs:
 
         if [ "$VALID" = "true" ]; then
           echo ""
-          if [ "$CARRIED_FORWARD" = "true" ]; then
-            echo "  ✅ APPROVED — Carried forward from PR-level approval"
-          else
-            echo "  ✅ APPROVED — Receipt verified"
-          fi
+          echo "  ✅ APPROVED — Receipt verified"
           if [ -n "$RECEIPT_ID" ]; then
             echo "  📋 Receipt: ${RECEIPT_ID}"
           fi

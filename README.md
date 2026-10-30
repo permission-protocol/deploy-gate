@@ -144,6 +144,12 @@ Deploy Gate checks for valid receipt
 | PR comments + screenshots | No | No | Open to mutation |
 | Deploy Gate | Yes | Yes (Ed25519 receipt) | Fails closed for production |
 
+## Carry-forward approvals
+
+The next Action release rejects approvals carried forward from an earlier PR head. The read-only verification result is checked before any redemption request, so a rejected receipt is not consumed. Each new PR head needs a fresh approval for its exact SHA. There is no carry-forward opt-in. Final redemption and reconciliation responses are also checked before reporting approval.
+
+This client check relies on the verifier reporting carry-forward accurately; the server must also enforce receipt scope against the exact current head. These changes are unreleased until included in a new Action release.
+
 ## Resources
 
 - Trust + compliance: https://permissionprotocol.com/trust
