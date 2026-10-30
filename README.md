@@ -49,6 +49,31 @@ gh secret set PP_API_KEY -b "pp_live_..."
 
 Full install guide: [INSTALL.md](./INSTALL.md)
 
+### Gate the deploy too
+
+On `push` and `workflow_dispatch` the action runs in deploy mode: it finds the PR that merged the commit, verifies that PR's approval, and redeems it once. Put it before your Vercel, Netlify, Railway or Fly.io deploy step and turn off the provider's own Git deploys. See [INSTALL.md](./INSTALL.md#gate-the-deploy-itself-vercel-netlify-railway-flyio).
+
+```yaml
+on:
+  push:
+    branches: [main]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: permission-protocol/deploy-gate@v2
+        with:
+          pp-api-key: ${{ secrets.PP_API_KEY }}
+      - run: npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+```
+
 ## Why this exists
 
 AI agents are moving from "suggest text" to "take actions": committing code, modifying workflows, and deploying to production. GitHub controls like branch protection, environments, and required reviewers gate humans, not agents.
@@ -68,6 +93,10 @@ When audit time comes, you do not want to hand over a mutable PR comment thread.
 | Non-production | `open` (opt-in) | ✅ Pass with `::warning::` log |
 
 Inputs:
+
+- `wait-for-approval`: defaults to `true`. In deploy mode, wait up to 30 minutes for a human approval or renewal and resume automatically. PR mode still returns missing approvals immediately so the PR can show its signing link. Set `false` to return missing or expired approvals immediately in deploy mode.
+- Transient verification failures (network errors, HTTP 500/502/503/504, rate limits and temporary GitHub policy-read failures) recover through non-redeeming reads every 15 seconds. PR mode and deploy mode with approval waiting disabled have a five-minute recovery budget. Denials, auth/scope failures, revoked or invalid signatures and unavailable tenant keys stop immediately. A final redeeming request is sent only once. A lost response can recover through a read of the exact still-valid consumed attempt, with current policy and signer checks; an unresolved outcome requires inspection. Production never fails open.
+- [Durable stopped-workflow recovery](RECOVERY.md): a separate coordinator can restart a confirmed read-only approval timeout through the normal gate. These changes are proposed and unreleased; existing `v2` installs do not yet include them.
 
 - `fail-mode`: `closed` (default) or `open` — only honored in non-production environments.
 - `production-environments`: comma-separated environment names treated as production, default `production,prod,live`.
@@ -107,7 +136,7 @@ Deploy Gate checks for valid receipt
 - Posts a PR comment with a direct approval link
 - Unblocks the PR instantly after approval
 - Produces a tamper-evident approval receipt
-- Fails closed on draft PRs by default, so a skipped draft check cannot stay green after the PR is marked ready for review
+- Stops draft PRs without reporting approval; marking ready reruns receipt verification (unreleased)
 
 ## Comparison
 

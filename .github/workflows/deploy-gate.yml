@@ -3,6 +3,7 @@ name: Deploy Gate
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -14,13 +15,51 @@ jobs:
     name: Permission Protocol
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: permission-protocol/deploy-gate@v2
+      - name: Download trusted published gate client
+        # Only this public, hash-verified file is needed. The release tree has
+        # an unrelated dangling gitlink that breaks checkout's auth cleanup.
+        shell: bash
+        run: |
+          mkdir .pp-gate-client
+          curl --fail --show-error --silent --location --proto '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            https://raw.githubusercontent.com/permission-protocol/deploy-gate/214e1de8d966e1b757b172f6d0fae41620307e15/action.yml \
+            --output .pp-gate-client/action.yml
+      - name: Normalize released gate packaging
+        # Published v2.4.0 exceeds GitHub's inline-expression limit. Use its
+        # immutable trusted code, changing only equivalent env interpolation.
+        # No candidate PR code is executed with the gate credentials.
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from hashlib import sha256
+          path = Path('.pp-gate-client/action.yml')
+          original = path.read_bytes()
+          if sha256(original).hexdigest() != 'fb245151187c4e7cdc4e42607f4e1ee52ef6da81e8d060020456be8dfd310e6d':
+              raise SystemExit('Published gate identity could not be established')
+          header, separator, script = original.decode('utf-8').partition('      run: |\n')
+          if not separator:
+              raise SystemExit('Published gate script is missing')
+          for expression, value in [('$' + '{{ github.repository }}', '${PP_REPOSITORY}'), ('$' + '{{ github.token }}', '${GH_TOKEN}')]:
+              if script.count(expression) != 3:
+                  raise SystemExit('Unexpected published gate packaging')
+              script = script.replace(expression, value)
+          if '$' + '{{' in script:
+              raise SystemExit('Unexpected inline expression in published gate')
+          path.write_text(header + separator + script, encoding='utf-8')
+          PY
+      - name: Verify with trusted published gate
+        uses: ./.pp-gate-client
+        env:
+          # gh pr view otherwise infers the repository from a local checkout.
+          GH_REPO: ${{ github.repository }}
         with:
           pp-api-key: ${{ secrets.PP_API_KEY }}
           pp-request-create-token: ${{ secrets.PP_REQUEST_CREATE_TOKEN }}
           environment: 'production'
           capability: 'deploy:main'
           fail-on-missing: 'true'
+          fail-mode: 'closed'
           post-comment: 'true'
           fail-open-timeout: '30'

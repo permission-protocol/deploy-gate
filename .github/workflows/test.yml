@@ -1,0 +1,20 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  action-script:
+    name: Action script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Packaging regression checks compare the immutable published client.
+          fetch-depth: 0
+      - run: ./test/run-tests.sh
