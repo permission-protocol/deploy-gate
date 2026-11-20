@@ -9,7 +9,7 @@ pp_reconcile_redemption() {
     response=$(curl -sS --max-time 15 -w '\n%{http_code}' -X POST "${PP_BASE_URL}/api/v1/receipts/verify" \
       -H 'Content-Type: application/json' -H "X-PP-API-Key: ${PP_API_KEY}" \
       -H 'X-PP-Request-Source: github-actions' -H "X-GitHub-Run-Id: ${PP_RUN_ID}" \
-      "${CHECK_RUN_HEADERS[@]}" -d "$read_body" 2>/dev/null) || failed=$?
+      ${CHECK_RUN_HEADERS[@]+"${CHECK_RUN_HEADERS[@]}"} -d "$read_body" 2>/dev/null) || failed=$?
     body=$(printf '%s\n' "$response" | sed '$d')
     status=$(printf '%s\n' "$response" | tail -n1)
     if [[ "$failed" == 0 && "$status" == 200 ]] && printf '%s' "$body" | jq -e \
