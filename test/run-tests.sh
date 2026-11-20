@@ -41,7 +41,9 @@ if [ "$1" = "api" ] && [[ "$2" == repos/*/commits/*/pulls ]]; then
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   case "$*" in
-    *isDraft*) echo "${STUB_IS_DRAFT:-false}" ;;
+    *isDraft*)
+      if [ "${STUB_DRAFT_LOOKUP_FAIL:-}" = 1 ]; then exit 1; fi
+      echo "${STUB_IS_DRAFT-false}" ;;
     *files*) printf 'src/app.ts\ndeploy/prod.yml\n' ;;
   esac
   exit 0
@@ -256,10 +258,45 @@ check "no commit lookup" "$(grep -c '/pulls' "$CASE_DIR/gh.log")" 0
 run_case "pull_request gate with redeem true" "${PR_CTX[@]}" PP_REDEEM=true <<<"$VALID"
 check "redeem" "$(request .redeem)" true
 
-run_case "draft PR skipped" "${PR_CTX[@]}" STUB_IS_DRAFT=true <<<"$VALID"
-check "exit" "$EXIT_CODE" 0
-check "decision" "$(output decision)" DRAFT_SKIPPED
+# Same PR and head: draft cannot leave a green result for ready_for_review.
+run_case "draft PR blocked" "${PR_CTX[@]}" STUB_IS_DRAFT=true <<<"$VALID"
+check "exit" "$EXIT_CODE" 1
+check "not approved" "$(output approved)" false
+check "decision" "$(output decision)" DRAFT_BLOCKED
+check "error" "$(output error-code)" PP_DRAFT_PR_BLOCKED
+check "no receipt" "$(output receipt-id)" ""
 check "no PP call" "$(no_request)" none
+
+run_case "ready_for_review on the same head still needs a receipt" "${PR_CTX[@]}" STUB_IS_DRAFT=false <<<'{"valid":false,"errorCode":"RECEIPT_NOT_FOUND"}'
+check "exit" "$EXIT_CODE" 1
+check "not approved" "$(output approved)" false
+check "same head verified" "$(request .scope.headSha)" '"approvedhead12"'
+check "missing receipt" "$(output error-code)" RECEIPT_NOT_FOUND
+
+run_case "ready_for_review on the same head verifies a fresh receipt" "${PR_CTX[@]}" STUB_IS_DRAFT=false <<<"$VALID"
+check "exit" "$EXIT_CODE" 0
+check "approved" "$(output approved)" true
+check "same head verified" "$(request .scope.headSha)" '"approvedhead12"'
+check "receipt" "$(output receipt-id)" rcpt_1
+check "read only" "$(request .redeem)" false
+
+run_case "draft cannot opt out through legacy skip or non-production settings" "${PR_CTX[@]}" STUB_IS_DRAFT=true PP_ALLOW_DRAFT_SKIP=true PP_ENVIRONMENT=staging PP_FAIL_MODE=open PP_FAIL_ON_MISSING=false PP_REDEEM=true <<<"$VALID"
+check "exit" "$EXIT_CODE" 1
+check "not approved" "$(output approved)" false
+check "error" "$(output error-code)" PP_DRAFT_PR_BLOCKED
+check "no PP call" "$(no_request)" none
+
+run_case "draft metadata lookup fails closed" "${PR_CTX[@]}" STUB_DRAFT_LOOKUP_FAIL=1 <<<"$VALID"
+check "exit" "$EXIT_CODE" 1
+check "error" "$(output error-code)" PP_PR_LOOKUP_FAILED
+check "no PP call" "$(no_request)" none
+
+for draft_state in '' null unknown; do
+  run_case "unreadable draft metadata '$draft_state' fails closed" "${PR_CTX[@]}" "STUB_IS_DRAFT=$draft_state" <<<"$VALID"
+  check "exit" "$EXIT_CODE" 1
+  check "error" "$(output error-code)" PP_PR_LOOKUP_FAILED
+  check "no PP call" "$(no_request)" none
+done
 
 run_case "pr mode without a PR" PP_MODE=pr <<<"$VALID"
 check "exit" "$EXIT_CODE" 1
