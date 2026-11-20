@@ -251,7 +251,7 @@ runs:
           echo "::error title=Permission Protocol::${message}"
           set_output "approved" "false"
           set_output "receipt-id" ""
-          set_output "decision" ""
+          set_output "decision" "${3:-}"
           set_output "error-code" "$code"
           set_output "error-message" "$message"
           set_output "request-id" ""
@@ -370,21 +370,19 @@ runs:
         set_output "pr-number" "$PP_PR_NUMBER"
         set_output "pr-head-sha" "$PP_PR_HEAD_SHA"
 
-        # Skip the gate entirely for draft PRs — not ready for review/approval.
-        # When the PR is marked ready for review, the gate will run again.
+        # A green draft skip can survive ready_for_review on the same head.
+        # Drafts must stop before verification, never report an approval.
         if [ "$PP_MODE_NORMALIZED" = "pr" ] && [ -n "${PP_PR_NUMBER}" ]; then
-          IS_DRAFT=$(gh pr view "${PP_PR_NUMBER}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
-          if [ "$IS_DRAFT" = "true" ]; then
-            echo "⏭️  Skipping Permission Protocol gate — PR #${PP_PR_NUMBER} is a draft"
-            set_output "approved" "true"
-            set_output "receipt-id" ""
-            set_output "decision" "DRAFT_SKIPPED"
-            set_output "error-code" ""
-            set_output "error-message" ""
-            set_output "request-id" ""
-            set_output "approval-url" ""
-            exit 0
+          if ! IS_DRAFT=$(gh pr view "${PP_PR_NUMBER}" --json isDraft --jq '.isDraft' 2>/dev/null); then
+            gate_error "PP_PR_LOOKUP_FAILED" "Could not establish whether PR #${PP_PR_NUMBER} is a draft."
           fi
+          case "$IS_DRAFT" in
+            true)
+              gate_error "PP_DRAFT_PR_BLOCKED" "Draft PRs require receipt verification before approval. Mark this PR ready for review and rerun the gate; include ready_for_review in the workflow trigger." "DRAFT_BLOCKED"
+              ;;
+            false) ;;
+            *) gate_error "PP_PR_LOOKUP_FAILED" "GitHub returned an unreadable draft state for PR #${PP_PR_NUMBER}." ;;
+          esac
         fi
 
         echo "🔍 Collecting changed files for risk metadata..."

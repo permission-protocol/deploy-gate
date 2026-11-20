@@ -51,3 +51,14 @@ test('a changed published client is refused before normalization', () => {
   assert.notEqual(result.status, 0); assert.match(result.stderr, /identity could not be established/);
   assert.equal(result.normalized, changed.toString('utf8'));
 });
+
+test('installation workflows rerun draft heads when marked ready for review', () => {
+  for (const path of ['README.md', 'INSTALL.md']) {
+    const source = readFileSync(join(repoRoot, path), 'utf8');
+    const triggers = [...source.matchAll(/pull_request:\s*\n([\s\S]*?)(?=\n\S|\n```)/g)];
+    assert.ok(triggers.length > 0, `${path} contains a PR workflow`);
+    for (const [, trigger] of triggers) assert.match(trigger, /types: \[opened, synchronize, reopened, ready_for_review\]/, path);
+  }
+  const action = readFileSync(join(repoRoot, 'action.yml'), 'utf8');
+  assert.ok(!action.includes('allow-draft-skip'), 'no input can restore an unverified draft approval');
+});

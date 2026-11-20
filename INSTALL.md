@@ -47,6 +47,7 @@ name: Deploy Gate
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 jobs:
@@ -69,6 +70,10 @@ Optional (auto-create request on missing receipt):
 ```
 
 Commit and push.
+
+---
+
+Draft PRs stop with `PP_DRAFT_PR_BLOCKED` without creating or verifying a receipt. Mark the PR ready for review to rerun the gate for the same head SHA. A valid receipt is still required; there is no draft-skip opt-in. This behavior is unreleased until included in a new Action release.
 
 ---
 
@@ -239,6 +244,7 @@ Error: Request failed with status code 404
 ```yaml
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 ```
 
